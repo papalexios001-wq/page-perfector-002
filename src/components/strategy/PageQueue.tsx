@@ -114,7 +114,7 @@ export function PageQueue() {
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [publishProgress, setPublishProgress] = useState<{ current: number; total: number; status: string }>({ current: 0, total: 0, status: '' });
   
-  const { wordpress, ai, optimization: optimizationSettings } = useConfigStore();
+  const { wordpress, ai, optimization: optimizationSettings, advanced, siteContext } = useConfigStore();
 
   const fetchPages = async () => {
     setIsLoading(true);
@@ -185,10 +185,27 @@ export function PageQueue() {
       siteUrl: wordpress.siteUrl,
       username: wordpress.username,
       applicationPassword: wordpress.applicationPassword,
-      aiConfig: aiConfigPayload, // Pass user's AI configuration
+      aiConfig: aiConfigPayload,
+      advanced: {
+        targetScore: advanced.targetScore,
+        minWordCount: advanced.minWordCount,
+        maxWordCount: advanced.maxWordCount,
+        enableFaqs: advanced.enableFaqs,
+        enableSchema: advanced.enableSchema,
+        enableInternalLinks: advanced.enableInternalLinks,
+        enableToc: advanced.enableToc,
+        enableKeyTakeaways: advanced.enableKeyTakeaways,
+        enableCtas: advanced.enableCtas,
+      },
+      siteContext: {
+        organizationName: siteContext.organizationName,
+        industry: siteContext.industry,
+        targetAudience: siteContext.targetAudience,
+        brandVoice: siteContext.brandVoice,
+      },
     }, {
       signal: abortControllerRef.current.signal,
-      timeoutMs: 90000, // 90 second timeout
+      timeoutMs: 150000, // 150 second timeout for longer content
     });
 
     if (error) {
@@ -429,14 +446,8 @@ export function PageQueue() {
       })));
     };
 
-    // Start with step 0 (validating)
+    // Start with step 0 (validating) - steps are updated by optimizeSinglePage callback
     handleStepChange(0);
-    
-    // Simulate step progression for AI analysis (step 2)
-    setTimeout(() => handleStepChange(2), 3000);
-    
-    // Simulate step progression for generating (step 3)
-    setTimeout(() => handleStepChange(3), 15000);
 
     const { success, optimization, error } = await optimizeSinglePage(pageId, handleStepChange);
     

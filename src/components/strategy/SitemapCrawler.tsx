@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Map, Loader2, AlertCircle, CheckCircle2, CloudOff } from 'lucide-react';
+import { Map, Loader2, AlertCircle, CheckCircle2, CloudOff, RefreshCw, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -17,8 +17,10 @@ interface CrawlResult {
   success: boolean;
   message: string;
   pagesAdded: number;
+  pagesKept: number;
+  pagesDeleted: number;
   totalFound: number;
-  errors: string[];
+  errors?: string[];
 }
 
 export function SitemapCrawler() {
@@ -26,7 +28,7 @@ export function SitemapCrawler() {
   const { wordpress } = useConfigStore();
   const [sitemapUrl, setSitemapUrl] = useState('/sitemap.xml');
   const [postType, setPostType] = useState('post');
-  const [maxPages, setMaxPages] = useState('100');
+  const [maxPages, setMaxPages] = useState('0'); // 0 = ALL
   const [excludeOptimized, setExcludeOptimized] = useState(false);
   const [lowScoreOnly, setLowScoreOnly] = useState(false);
   const [isCrawling, setIsCrawling] = useState(false);
@@ -65,7 +67,7 @@ export function SitemapCrawler() {
     addActivityLog({
       type: 'info',
       pageUrl: sitemapUrl,
-      message: 'Starting sitemap crawl...',
+      message: 'Starting sitemap crawl (replacing non-optimized pages)...',
     });
 
     const { data, error } = await invokeEdgeFunction<CrawlResult>('crawl-sitemap', {
@@ -75,7 +77,8 @@ export function SitemapCrawler() {
       username: wordpress.username,
       applicationPassword: wordpress.applicationPassword,
       postType,
-      maxPages: parseInt(maxPages),
+      maxPages: parseInt(maxPages), // 0 = ALL
+      replaceExisting: true, // Always replace non-optimized pages
       excludeOptimized,
       lowScoreOnly,
     });
@@ -86,6 +89,8 @@ export function SitemapCrawler() {
         success: false,
         message: error.message,
         pagesAdded: 0,
+        pagesKept: 0,
+        pagesDeleted: 0,
         totalFound: 0,
         errors: [error.message],
       });
@@ -106,22 +111,27 @@ export function SitemapCrawler() {
     const result = data!;
     setCrawlResult(result);
 
-    if (result.success && result.pagesAdded > 0) {
-      // Pages are now saved directly to database by the edge function
-      // We need to refresh the local store from database
+    if (result.success && (result.pagesAdded > 0 || result.pagesKept > 0)) {
       addActivityLog({
         type: 'success',
         pageUrl: sitemapUrl,
-        message: `Successfully added ${result.pagesAdded} pages to queue`,
-        details: { totalFound: result.totalFound, pagesAdded: result.pagesAdded },
+        message: `Crawl complete: ${result.pagesAdded} new, ${result.pagesKept} kept, ${result.pagesDeleted} replaced`,
+        details: { 
+          totalFound: result.totalFound, 
+          pagesAdded: result.pagesAdded,
+          pagesKept: result.pagesKept,
+          pagesDeleted: result.pagesDeleted,
+        },
       });
 
-      toast.success(`Added ${result.pagesAdded} pages to queue!`, {
-        description: `Total in sitemap: ${result.totalFound}`,
+      toast.success(`Sitemap crawl complete!`, {
+        description: `${result.pagesAdded} new pages added, ${result.pagesKept} optimized pages kept`,
       });
     } else if (result.success && result.pagesAdded === 0) {
-      toast.warning('No pages added', {
-        description: 'The sitemap was accessible but contained no matching URLs',
+      toast.warning('No new pages added', {
+        description: result.pagesKept > 0 
+          ? `All ${result.pagesKept} pages are already optimized` 
+          : 'The sitemap was accessible but contained no matching URLs',
       });
     } else {
       addActivityLog({
@@ -158,6 +168,14 @@ export function SitemapCrawler() {
             <p className="text-xs text-warning">Connect Lovable Cloud to enable crawling</p>
           </motion.div>
         )}
+
+        {/* Info about replace behavior */}
+        <div className="p-2 rounded-lg bg-primary/5 border border-primary/20 flex items-start gap-2">
+          <RefreshCw className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+          <div className="text-xs text-muted-foreground">
+            <span className="text-primary font-medium">Smart Replace Mode:</span> Keeps optimized pages, replaces everything else with fresh sitemap data.
+          </div>
+        </div>
 
         <div className="space-y-2">
           <Label className="text-xs text-muted-foreground">Sitemap URL</Label>
@@ -196,11 +214,13 @@ export function SitemapCrawler() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="25">25</SelectItem>
+                <SelectItem value="0">All URLs</SelectItem>
                 <SelectItem value="50">50</SelectItem>
                 <SelectItem value="100">100</SelectItem>
                 <SelectItem value="200">200</SelectItem>
                 <SelectItem value="500">500</SelectItem>
+                <SelectItem value="1000">1,000</SelectItem>
+                <SelectItem value="5000">5,000</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -225,9 +245,9 @@ export function SitemapCrawler() {
           {isCrawling ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
-            <Map className="w-4 h-4" />
+            <RefreshCw className="w-4 h-4" />
           )}
-          {isCrawling ? 'Crawling...' : 'Crawl Sitemap'}
+          {isCrawling ? 'Crawling...' : 'Crawl & Replace'}
         </Button>
 
         {crawlResult && (
@@ -235,24 +255,34 @@ export function SitemapCrawler() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             className={cn(
-              'p-2 rounded-lg text-sm text-center',
+              'p-3 rounded-lg text-sm',
               crawlResult.success 
-                ? 'bg-success/10 text-success' 
-                : 'bg-destructive/10 text-destructive'
+                ? 'bg-success/10 border border-success/30' 
+                : 'bg-destructive/10 border border-destructive/30'
             )}
           >
             {crawlResult.success ? (
-              <span className="flex items-center justify-center gap-1">
-                <CheckCircle2 className="w-4 h-4" />
-                Added: <span className="font-mono font-bold">{crawlResult.pagesAdded}</span> pages
-                {crawlResult.totalFound > crawlResult.pagesAdded && (
-                  <span className="text-muted-foreground">
-                    (of {crawlResult.totalFound})
-                  </span>
-                )}
-              </span>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1 text-success font-medium">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Crawl Complete
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span>Total in sitemap:</span>
+                  <span className="font-mono font-medium text-foreground">{crawlResult.totalFound}</span>
+                  
+                  <span>New pages added:</span>
+                  <span className="font-mono font-medium text-success">{crawlResult.pagesAdded}</span>
+                  
+                  <span>Optimized kept:</span>
+                  <span className="font-mono font-medium text-primary">{crawlResult.pagesKept}</span>
+                  
+                  <span>Old pages replaced:</span>
+                  <span className="font-mono font-medium text-warning">{crawlResult.pagesDeleted}</span>
+                </div>
+              </div>
             ) : (
-              <span className="flex items-center justify-center gap-1">
+              <span className="flex items-center justify-center gap-1 text-destructive">
                 <AlertCircle className="w-4 h-4" />
                 {crawlResult.message}
               </span>

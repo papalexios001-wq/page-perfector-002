@@ -13,18 +13,21 @@ interface CrawlRequest {
   username: string;
   applicationPassword: string;
   postType?: string;
-  maxPages?: number;
+  maxPages?: number; // 0 or undefined = ALL
+  replaceExisting?: boolean; // Default true - delete non-optimized pages before insert
 }
 
 interface CrawlResponse {
   success: boolean;
   message: string;
   totalFound: number;
-  processingInBackground: boolean;
+  pagesAdded: number;
+  pagesKept: number;
+  pagesDeleted: number;
 }
 
 // Depth limit for nested sitemaps
-const MAX_SITEMAP_DEPTH = 2;
+const MAX_SITEMAP_DEPTH = 3;
 
 async function fetchSitemap(url: string, visitedUrls: Set<string> = new Set(), depth: number = 0): Promise<string[]> {
   console.log(`[Sitemap Crawler] Fetching sitemap (depth ${depth}): ${url}`);
@@ -97,13 +100,12 @@ async function fetchSitemap(url: string, visitedUrls: Set<string> = new Set(), d
     }
   }
 
-  console.log(`[Sitemap Crawler] Found ${urls.length} URLs`);
+  console.log(`[Sitemap Crawler] Found ${urls.length} URLs at depth ${depth}`);
   return urls;
 }
 
 // Quick score calculation without external requests
 function calculateQuickScore(url: string): { overall: number; components: Record<string, number> } {
-  // Base score with slight variation based on URL characteristics
   const hasCategory = url.includes('/category/') || url.includes('/tag/');
   const isDeep = (url.match(/\//g) || []).length > 4;
   const hasNumbers = /\d{4}/.test(url);
@@ -141,10 +143,12 @@ serve(async (req) => {
       username, 
       applicationPassword,
       postType = 'post',
-      maxPages = 50,
+      maxPages = 0, // 0 = ALL
+      replaceExisting = true,
     }: CrawlRequest = await req.json();
 
     console.log(`[Sitemap Crawler] Starting crawl for site ${siteId}: ${siteUrl}`);
+    console.log(`[Sitemap Crawler] Options: maxPages=${maxPages}, replaceExisting=${replaceExisting}, postType=${postType}`);
 
     if (!siteUrl || !sitemapPath) {
       return new Response(
@@ -152,7 +156,9 @@ serve(async (req) => {
           success: false,
           message: 'Missing required fields',
           totalFound: 0,
-          processingInBackground: false,
+          pagesAdded: 0,
+          pagesKept: 0,
+          pagesDeleted: 0,
         } as CrawlResponse),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -169,7 +175,7 @@ serve(async (req) => {
       normalizedUrl = 'https://' + normalizedUrl;
     }
 
-    // Build sitemap URL - fix double URL issue
+    // Build sitemap URL
     let sitemapUrl: string;
     if (sitemapPath.startsWith('http')) {
       sitemapUrl = sitemapPath;
@@ -184,7 +190,7 @@ serve(async (req) => {
     let allUrls: string[];
     try {
       allUrls = await fetchSitemap(sitemapUrl);
-      allUrls = [...new Set(allUrls)];
+      allUrls = [...new Set(allUrls)]; // Dedupe
     } catch (error) {
       console.error('[Sitemap Crawler] Failed to fetch sitemap:', error);
       
@@ -201,7 +207,9 @@ serve(async (req) => {
           success: false,
           message: `Failed to fetch sitemap: ${error instanceof Error ? error.message : 'Unknown error'}`,
           totalFound: 0,
-          processingInBackground: false,
+          pagesAdded: 0,
+          pagesKept: 0,
+          pagesDeleted: 0,
         } as CrawlResponse),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -213,25 +221,85 @@ serve(async (req) => {
           success: true,
           message: 'Sitemap contains no page URLs',
           totalFound: 0,
-          processingInBackground: false,
+          pagesAdded: 0,
+          pagesKept: 0,
+          pagesDeleted: 0,
         } as CrawlResponse),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const urlsToProcess = allUrls.slice(0, maxPages);
+    console.log(`[Sitemap Crawler] Total unique URLs found: ${allUrls.length}`);
+
+    // Apply maxPages limit if specified (0 = no limit)
+    const urlsToProcess = maxPages > 0 ? allUrls.slice(0, maxPages) : allUrls;
     console.log(`[Sitemap Crawler] Processing ${urlsToProcess.length} of ${allUrls.length} URLs`);
 
-    // Prepare pages for immediate insert (quick processing)
-    const pagesToInsert = urlsToProcess.map(url => {
+    let pagesKept = 0;
+    let pagesDeleted = 0;
+
+    // STEP 1: If replaceExisting is true, delete all NON-COMPLETED pages for this site
+    if (replaceExisting && siteId) {
+      // First, count how many completed pages we're keeping
+      const { count: completedCount } = await supabase
+        .from('pages')
+        .select('id', { count: 'exact', head: true })
+        .eq('site_id', siteId)
+        .eq('status', 'completed');
+
+      pagesKept = completedCount || 0;
+      console.log(`[Sitemap Crawler] Keeping ${pagesKept} completed/optimized pages`);
+
+      // Delete all non-completed pages for this site
+      const { error: deleteError, count: deletedCount } = await supabase
+        .from('pages')
+        .delete({ count: 'exact' })
+        .eq('site_id', siteId)
+        .neq('status', 'completed');
+
+      if (deleteError) {
+        console.error('[Sitemap Crawler] Error deleting non-completed pages:', deleteError);
+      } else {
+        pagesDeleted = deletedCount || 0;
+        console.log(`[Sitemap Crawler] Deleted ${pagesDeleted} non-completed pages`);
+      }
+    }
+
+    // STEP 2: Get existing completed page URLs to avoid duplicates
+    const existingCompletedUrls = new Set<string>();
+    if (siteId) {
+      const { data: completedPages } = await supabase
+        .from('pages')
+        .select('url')
+        .eq('site_id', siteId)
+        .eq('status', 'completed');
+
+      if (completedPages) {
+        for (const p of completedPages) {
+          existingCompletedUrls.add(p.url);
+        }
+      }
+    }
+    console.log(`[Sitemap Crawler] Existing completed URLs to skip: ${existingCompletedUrls.size}`);
+
+    // STEP 3: Prepare pages for insert (excluding already-completed URLs)
+    const pagesToInsert = [];
+    for (const url of urlsToProcess) {
       const urlObj = new URL(url);
-      const pathParts = urlObj.pathname.split('/').filter(Boolean);
+      const pathname = urlObj.pathname || '/';
+      
+      // Skip if this URL is already completed/optimized
+      if (existingCompletedUrls.has(pathname)) {
+        continue;
+      }
+
+      const pathParts = pathname.split('/').filter(Boolean);
       const slug = pathParts[pathParts.length - 1] || 'home';
       const score = calculateQuickScore(url);
 
-      return {
+      pagesToInsert.push({
         site_id: siteId || null,
-        url: urlObj.pathname || '/',
+        url: pathname,
         slug,
         title: slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
         word_count: 0,
@@ -240,49 +308,57 @@ serve(async (req) => {
         post_type: postType,
         categories: [],
         tags: [],
-      };
-    });
-
-    // Insert pages
-    const { data: insertedPages, error: insertError } = await supabase
-      .from('pages')
-      .insert(pagesToInsert)
-      .select('id');
-
-    if (insertError) {
-      console.error('[Sitemap Crawler] Insert error:', insertError);
-      return new Response(
-        JSON.stringify({
-          success: false,
-          message: `Database error: ${insertError.message}`,
-          totalFound: allUrls.length,
-          processingInBackground: false,
-        } as CrawlResponse),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      });
     }
 
-    const pagesAdded = insertedPages?.length || 0;
-    console.log(`[Sitemap Crawler] Inserted ${pagesAdded} pages`);
+    console.log(`[Sitemap Crawler] New pages to insert: ${pagesToInsert.length}`);
+
+    // STEP 4: Insert pages in batches (handle large sitemaps)
+    const BATCH_SIZE = 100;
+    let totalInserted = 0;
+
+    for (let i = 0; i < pagesToInsert.length; i += BATCH_SIZE) {
+      const batch = pagesToInsert.slice(i, i + BATCH_SIZE);
+      
+      const { data: insertedPages, error: insertError } = await supabase
+        .from('pages')
+        .insert(batch)
+        .select('id');
+
+      if (insertError) {
+        console.error(`[Sitemap Crawler] Batch insert error (batch ${Math.floor(i / BATCH_SIZE) + 1}):`, insertError);
+        // Continue with next batch instead of failing completely
+      } else {
+        totalInserted += insertedPages?.length || 0;
+      }
+    }
+
+    console.log(`[Sitemap Crawler] Successfully inserted ${totalInserted} pages`);
 
     // Log activity
     if (siteId) {
       await supabase.from('activity_log').insert({
         site_id: siteId,
         type: 'success',
-        message: `Crawled sitemap: ${pagesAdded} pages added`,
-        details: { totalFound: allUrls.length, pagesAdded },
+        message: `Sitemap crawl complete: ${totalInserted} new pages added, ${pagesKept} optimized pages kept, ${pagesDeleted} old pages replaced`,
+        details: { 
+          totalFound: allUrls.length, 
+          pagesAdded: totalInserted,
+          pagesKept,
+          pagesDeleted,
+        },
       });
     }
 
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Added ${pagesAdded} pages to queue`,
+        message: `Added ${totalInserted} pages, kept ${pagesKept} optimized, replaced ${pagesDeleted}`,
         totalFound: allUrls.length,
-        processingInBackground: false,
-        pagesAdded,
-      }),
+        pagesAdded: totalInserted,
+        pagesKept,
+        pagesDeleted,
+      } as CrawlResponse),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
@@ -292,9 +368,11 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: false,
-        message: 'Sitemap crawl failed',
+        message: `Sitemap crawl failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         totalFound: 0,
-        processingInBackground: false,
+        pagesAdded: 0,
+        pagesKept: 0,
+        pagesDeleted: 0,
       } as CrawlResponse),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
