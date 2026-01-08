@@ -20,6 +20,26 @@ interface AIConfig {
   model: string;
 }
 
+interface AdvancedSettings {
+  targetScore: number;
+  minWordCount: number;
+  maxWordCount: number;
+  enableFaqs: boolean;
+  enableSchema: boolean;
+  enableInternalLinks: boolean;
+  enableToc: boolean;
+  enableKeyTakeaways: boolean;
+  enableCtas: boolean;
+}
+
+interface SiteContext {
+  organizationName?: string;
+  authorName?: string;
+  industry?: string;
+  targetAudience?: string;
+  brandVoice?: string;
+}
+
 interface OptimizeRequest {
   pageId: string;
   siteUrl: string;
@@ -28,7 +48,9 @@ interface OptimizeRequest {
   targetKeyword?: string;
   language?: string;
   region?: string;
-  aiConfig?: AIConfig; // User's AI configuration
+  aiConfig?: AIConfig;
+  advanced?: AdvancedSettings;
+  siteContext?: SiteContext;
 }
 
 interface OptimizationResult {
@@ -60,61 +82,194 @@ interface OptimizationResult {
     qualityScore: number;
     estimatedRankPosition: number;
     confidenceLevel: number;
+    tableOfContents?: string[];
+    faqs?: Array<{ question: string; answer: string }>;
+    keyTakeaways?: string[];
   };
   cached?: boolean;
   requestId?: string;
   error?: string;
 }
 
-// Simplified prompt to prevent truncation with free/limited models
-const OPTIMIZATION_PROMPT = `You are an expert SEO content writer with Alex Hormozi's persuasive style. Transform content into engaging, high-converting articles.
+// Build dynamic prompt based on advanced settings
+function buildOptimizationPrompt(advanced: AdvancedSettings, siteContext?: SiteContext): string {
+  const minWords = advanced.minWordCount || 2000;
+  const maxWords = advanced.maxWordCount || 3000;
+  const targetScore = advanced.targetScore || 85;
+  
+  const brandVoice = siteContext?.brandVoice || 'professional';
+  const industry = siteContext?.industry || 'general';
+  const audience = siteContext?.targetAudience || 'general audience';
+  const orgName = siteContext?.organizationName || '';
+  
+  // Build enhancements list
+  const enhancements: string[] = [];
+  if (advanced.enableToc) enhancements.push('TABLE OF CONTENTS');
+  if (advanced.enableFaqs) enhancements.push('5-7 FAQs');
+  if (advanced.enableKeyTakeaways) enhancements.push('KEY TAKEAWAYS BOX');
+  if (advanced.enableCtas) enhancements.push('STRONG CTAs');
+  if (advanced.enableSchema) enhancements.push('STRUCTURED DATA/SCHEMA');
+  if (advanced.enableInternalLinks) enhancements.push('6-12 INTERNAL LINKS');
+  
+  return `You are an ELITE SEO content strategist and copywriter combining the persuasive power of Alex Hormozi with the technical precision of enterprise SEO. Your mission: transform mediocre content into TRAFFIC-DRIVING, RANKING-DOMINATING, CONVERSION-OPTIMIZED masterpieces.
 
-WRITING STYLE:
-- Short paragraphs (2-3 sentences max)
-- Use "you" frequently, write conversationally
-- Include specific numbers and stats
-- Add power words: Discover, Proven, Secret, Revolutionary
-- Make it scannable with bullet points and headers
+═══════════════════════════════════════════════════════════════
+ABSOLUTE REQUIREMENTS (NON-NEGOTIABLE)
+═══════════════════════════════════════════════════════════════
 
-CONTENT FORMAT:
-- Start with a hook (shocking stat or bold statement)
-- Add TL;DR summary box at top
-- Use H2s for major sections, H3s for subsections
-- Include actionable tips in highlight boxes
-- End with clear CTA and 3-5 FAQs
+📏 WORD COUNT: ${minWords}-${maxWords} words (STRICTLY ENFORCED)
+🎯 QUALITY TARGET: ${targetScore}+ score
+🔗 INTERNAL LINKS: EXACTLY 6-12 internal links with RICH, DESCRIPTIVE anchor text
+📊 REQUIRED ENHANCEMENTS: ${enhancements.join(', ')}
 
-HTML ELEMENTS TO USE (IMPORTANT: use SINGLE quotes for attributes):
-<div class='tldr-box'><strong>TL;DR:</strong> [summary]</div>
-<div class='key-insight'><strong>Key Insight:</strong> [insight]</div>
-<div class='pro-tip'><strong>Pro Tip:</strong> [tip]</div>
-<div class='warning-box'><strong>Watch Out:</strong> [warning]</div>
-<blockquote class='pull-quote'>[quote]</blockquote>
+═══════════════════════════════════════════════════════════════
+BRAND & AUDIENCE CONTEXT
+═══════════════════════════════════════════════════════════════
 
-Use ✅ for benefits, ❌ for mistakes, 👉 for actions in lists.
+${orgName ? `Organization: ${orgName}` : ''}
+Industry: ${industry}
+Target Audience: ${audience}
+Brand Voice: ${brandVoice}
 
-CRITICAL JSON RULES:
-- Return ONLY valid JSON (no markdown, no explanation).
-- "optimizedContent" MUST be a single JSON string.
-- Do NOT include any unescaped double quotes (") inside optimizedContent.
-  - Use single quotes for HTML attributes.
-  - If you need quotation marks in text, use &quot; instead.
-- Do NOT include literal newlines inside optimizedContent. Use \n if needed.
+═══════════════════════════════════════════════════════════════
+WRITING STYLE (HORMOZI-INSPIRED SEO COPYWRITING)
+═══════════════════════════════════════════════════════════════
 
-OUTPUT JSON SCHEMA:
+✅ SHORT PARAGRAPHS: 2-3 sentences MAX. White space is your friend.
+✅ CONVERSATIONAL: Use "you" constantly. Write like you're talking to ONE person.
+✅ SPECIFIC NUMBERS: "87% of users..." NOT "most users..."
+✅ POWER WORDS: Discover, Proven, Secret, Revolutionary, Breakthrough, Exclusive
+✅ PATTERN INTERRUPTS: Questions, bold statements, unexpected transitions
+✅ BENEFIT-FOCUSED: Every feature needs a "so what?" explanation
+✅ SCANNABLE: Headers, bullets, numbered lists, boxes for key info
+✅ EMOTIONAL HOOKS: Pain points → Agitation → Solution
+
+═══════════════════════════════════════════════════════════════
+CONTENT STRUCTURE (FOLLOW THIS EXACTLY)
+═══════════════════════════════════════════════════════════════
+
+1. 🎯 TL;DR BOX (top of article)
+   <div class='wp-opt-tldr'><strong>⚡ TL;DR:</strong> [3-4 sentence summary with main takeaway]</div>
+
+2. 📑 TABLE OF CONTENTS (if enabled)
+   <div class='wp-opt-toc'><strong>📑 What You'll Learn:</strong><ul><li>...</li></ul></div>
+
+3. 🔥 HOOK (first paragraph)
+   Start with shocking stat, bold claim, or provocative question
+
+4. 📖 MAIN CONTENT SECTIONS (6-10 H2s, each with 2-4 H3s)
+   - Each section: 200-400 words
+   - Include at least one special box per section
+   - Add internal links naturally within content
+
+5. 💡 KEY TAKEAWAYS BOX (if enabled)
+   <div class='wp-opt-takeaways'><strong>🔑 Key Takeaways:</strong><ul><li>✅ ...</li></ul></div>
+
+6. ❓ FAQ SECTION (if enabled)
+   <div class='wp-opt-faq'><h3>❓ [Question]</h3><p>[Answer 2-3 sentences]</p></div>
+
+7. 🚀 STRONG CTA (if enabled)
+   <div class='wp-opt-cta'><strong>🚀 Ready to [Action]?</strong><p>[Compelling call-to-action]</p></div>
+
+═══════════════════════════════════════════════════════════════
+SPECIAL HTML ELEMENTS (USE THROUGHOUT - SINGLE QUOTES ONLY!)
+═══════════════════════════════════════════════════════════════
+
+<div class='wp-opt-tldr'><strong>⚡ TL;DR:</strong> [summary]</div>
+<div class='wp-opt-toc'><strong>📑 Contents:</strong><ul><li>...</li></ul></div>
+<div class='wp-opt-insight'><strong>💡 Key Insight:</strong> [insight]</div>
+<div class='wp-opt-tip'><strong>🚀 Pro Tip:</strong> [actionable tip]</div>
+<div class='wp-opt-warning'><strong>⚠️ Warning:</strong> [what to avoid]</div>
+<div class='wp-opt-example'><strong>📋 Example:</strong> [real-world example]</div>
+<div class='wp-opt-stat'><strong>📊 Did You Know?</strong> [surprising statistic]</div>
+<div class='wp-opt-quote'><blockquote>[expert quote]</blockquote><cite>— [Source]</cite></div>
+<div class='wp-opt-takeaways'><strong>🔑 Key Takeaways:</strong><ul><li>✅ ...</li></ul></div>
+<div class='wp-opt-faq'><h3>❓ [Question]</h3><p>[Answer]</p></div>
+<div class='wp-opt-cta'><strong>🚀 [CTA Headline]</strong><p>[CTA text]</p></div>
+<div class='wp-opt-comparison'><strong>⚖️ Quick Comparison:</strong>[comparison content]</div>
+<div class='wp-opt-checklist'><strong>✅ Checklist:</strong><ul><li>☐ ...</li></ul></div>
+
+Use ✅ for benefits, ❌ for mistakes/myths, 👉 for actions, 💰 for money/value, ⏱️ for time
+
+═══════════════════════════════════════════════════════════════
+INTERNAL LINKING REQUIREMENTS (CRITICAL!)
+═══════════════════════════════════════════════════════════════
+
+You MUST include EXACTLY 6-12 internal links with these rules:
+- Use RICH, DESCRIPTIVE anchor text (NOT "click here" or "read more")
+- Good: "comprehensive guide to email marketing automation"
+- Bad: "this article" or "here"
+- Distribute links naturally throughout the content
+- Link to related topics, deeper dives, and complementary content
+- Format: <a href='/[slug]' class='wp-opt-internal'>[rich anchor text]</a>
+
+═══════════════════════════════════════════════════════════════
+SEO/GEO/AEO OPTIMIZATION
+═══════════════════════════════════════════════════════════════
+
+SEO (Search Engine Optimization):
+- Target keyword in H1, first paragraph, and 2-3 H2s
+- Keyword density: 1-2% (natural, not stuffed)
+- Include 8-12 LSI/semantic keywords throughout
+- Use long-tail variations in H3s
+
+GEO (Generative Engine Optimization - for AI answers):
+- Include direct, factual answers to common questions
+- Use structured data and clear definitions
+- Format content for featured snippets
+- Include "What is...", "How to...", "Why..." sections
+
+AEO (Answer Engine Optimization):
+- FAQs with concise, direct answers
+- Lists and step-by-step instructions
+- Clear definitions and explanations
+- Bullet points for scannable facts
+
+═══════════════════════════════════════════════════════════════
+JSON OUTPUT FORMAT (CRITICAL - FOLLOW EXACTLY!)
+═══════════════════════════════════════════════════════════════
+
+Return ONLY valid JSON. No markdown, no explanation, no preamble.
+Use SINGLE QUOTES for all HTML attributes inside strings.
+Escape all newlines as \\n inside JSON strings.
+
 {
-  "optimizedTitle": "60 char max title with keyword",
-  "metaDescription": "155 char description with CTA",
-  "h1": "Main heading with keyword",
-  "h2s": ["Section 1", "Section 2", "Section 3"],
-  "optimizedContent": "<div class='tldr-box'>...</div><h2>...</h2><p>...</p>...",
-  "contentStrategy": {"wordCount": 1500, "readabilityScore": 75, "keywordDensity": 1.2, "lsiKeywords": ["kw1", "kw2"]},
-  "internalLinks": [{"anchor": "text", "target": "/slug", "position": 100}],
-  "schema": {"@context": "https://schema.org", "@type": "Article", "headline": "title"},
-  "aiSuggestions": {"contentGaps": "gaps", "quickWins": "wins", "improvements": ["imp1", "imp2"]},
-  "qualityScore": 85,
-  "estimatedRankPosition": 5,
-  "confidenceLevel": 0.85
+  "optimizedTitle": "[50-60 chars, keyword at start, power word]",
+  "metaDescription": "[150-160 chars, keyword, benefit, CTA]",
+  "h1": "[Compelling H1 with keyword, slightly different from title]",
+  "h2s": ["[6-10 H2 subheadings covering the topic comprehensively]"],
+  "optimizedContent": "[FULL HTML content ${minWords}-${maxWords} words, all boxes, 6-12 internal links, FAQs, ToC, etc.]",
+  "contentStrategy": {
+    "wordCount": [actual word count - MUST be ${minWords}-${maxWords}],
+    "readabilityScore": [60-80 Flesch-Kincaid],
+    "keywordDensity": [1.0-2.0],
+    "lsiKeywords": ["8-12 semantic keywords used"]
+  },
+  "internalLinks": [
+    {"anchor": "[rich descriptive text]", "target": "/[slug]", "position": [word position]}
+  ],
+  "schema": {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    "headline": "[title]",
+    "description": "[meta description]",
+    "author": {"@type": "Person", "name": "[author or org]"},
+    "datePublished": "[ISO date]",
+    "mainEntityOfPage": {"@type": "WebPage"}
+  },
+  "aiSuggestions": {
+    "contentGaps": "[what competitors cover that's missing]",
+    "quickWins": "[easy improvements for quick ranking boost]",
+    "improvements": ["[3-5 specific next steps]"]
+  },
+  "tableOfContents": ["[H2 sections for ToC]"],
+  "faqs": [{"question": "...", "answer": "..."}],
+  "keyTakeaways": ["[5-7 key points]"],
+  "qualityScore": [${targetScore}+],
+  "estimatedRankPosition": [1-10],
+  "confidenceLevel": [0.80-0.95]
 }`;
+}
 
 const escapeNewlinesInJsonStrings = (input: string): string => {
   let out = '';
@@ -164,11 +319,10 @@ const repairJsonStringForParsing = (raw: string): string => {
   // 1) Normalize line endings
   let s = raw.replace(/\r/g, '');
 
-  // 2) Repair a common failure mode: unescaped double quotes in HTML attributes
-  //    Example: <div class="tldr-box"> breaks JSON unless escaped
+  // 2) Repair unescaped double quotes in HTML attributes
   s = s.replace(/="([^"]*)"/g, "='$1'");
 
-  // 3) Escape literal newlines that appear inside quoted JSON strings
+  // 3) Escape literal newlines inside quoted JSON strings
   s = escapeNewlinesInJsonStrings(s);
 
   return s;
@@ -193,7 +347,20 @@ serve(async (req) => {
   try {
     const body: OptimizeRequest = await req.json();
     pageId = body.pageId;
-    const { siteUrl, username, applicationPassword, targetKeyword, language, region, aiConfig } = body;
+    const { siteUrl, username, applicationPassword, targetKeyword, language, region, aiConfig, advanced, siteContext } = body;
+
+    // Use defaults if advanced settings not provided
+    const effectiveAdvanced: AdvancedSettings = {
+      targetScore: advanced?.targetScore ?? 85,
+      minWordCount: advanced?.minWordCount ?? 2000,
+      maxWordCount: advanced?.maxWordCount ?? 3000,
+      enableFaqs: advanced?.enableFaqs ?? true,
+      enableSchema: advanced?.enableSchema ?? true,
+      enableInternalLinks: advanced?.enableInternalLinks ?? true,
+      enableToc: advanced?.enableToc ?? true,
+      enableKeyTakeaways: advanced?.enableKeyTakeaways ?? true,
+      enableCtas: advanced?.enableCtas ?? true,
+    };
 
     // Validate required fields
     validateRequired(body as unknown as Record<string, unknown>, ['pageId', 'siteUrl', 'username', 'applicationPassword']);
@@ -202,10 +369,13 @@ serve(async (req) => {
       pageId, 
       siteUrl, 
       aiProvider: aiConfig?.provider || 'lovable-default',
-      aiModel: aiConfig?.model || 'google/gemini-2.5-flash'
+      aiModel: aiConfig?.model || 'google/gemini-2.5-flash',
+      minWords: effectiveAdvanced.minWordCount,
+      maxWords: effectiveAdvanced.maxWordCount,
+      targetScore: effectiveAdvanced.targetScore,
     });
 
-    // Rate limiting: 10 optimizations per minute per site
+    // Rate limiting
     const rateLimitKey = `optimize:${siteUrl}`;
     const rateLimit = checkRateLimit(rateLimitKey, 10, 60000);
     if (!rateLimit.allowed) {
@@ -217,7 +387,7 @@ serve(async (req) => {
       );
     }
 
-    // Determine AI configuration - prefer user's config, fallback to Lovable AI
+    // Determine AI configuration
     const useUserAI = aiConfig?.provider && aiConfig?.apiKey && aiConfig?.model;
     
     if (!useUserAI && !lovableApiKey) {
@@ -229,7 +399,10 @@ serve(async (req) => {
       model: useUserAI ? aiConfig!.model : 'google/gemini-2.5-flash'
     });
 
-    // Idempotency check - use header key or generate from pageId + timestamp (10 second window)
+    // Build the dynamic prompt based on settings
+    const OPTIMIZATION_PROMPT = buildOptimizationPrompt(effectiveAdvanced, siteContext);
+
+    // Idempotency check
     const idemKey = idempotencyKey || generateIdempotencyKey('optimize', pageId, Math.floor(Date.now() / 10000).toString());
     
     const { result: optimizationResponse, cached } = await withIdempotency<OptimizationResult>(
@@ -240,6 +413,21 @@ serve(async (req) => {
           .from('pages')
           .update({ status: 'optimizing' })
           .eq('id', pageId);
+
+        // Create job record for progress tracking
+        const { data: job } = await supabase
+          .from('jobs')
+          .insert({
+            page_id: pageId,
+            status: 'running',
+            current_step: 'fetching_content',
+            progress: 10,
+            started_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        const jobId = job?.id;
 
         // Fetch page data from database
         const { data: pageData, error: pageError } = await supabase
@@ -254,6 +442,11 @@ serve(async (req) => {
 
         logger.info('Fetching content', { url: pageData.url, postId: pageData.post_id });
 
+        // Update job progress
+        if (jobId) {
+          await supabase.from('jobs').update({ current_step: 'fetching_wordpress', progress: 20 }).eq('id', jobId);
+        }
+
         // Fetch page content from WordPress
         let normalizedUrl = siteUrl.trim();
         if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
@@ -266,7 +459,6 @@ serve(async (req) => {
         let pageContent = '';
         let pageTitle = pageData.title;
 
-        // Try to fetch content if we have a post_id (with retry)
         if (pageData.post_id) {
           try {
             const wpResponse = await withRetry(
@@ -301,21 +493,54 @@ serve(async (req) => {
           }
         }
 
-        // Build the optimization prompt
-        const userPrompt = `
-Analyze and optimize this page:
+        // Update job progress
+        if (jobId) {
+          await supabase.from('jobs').update({ current_step: 'analyzing_content', progress: 40 }).eq('id', jobId);
+        }
 
+        // Build the user prompt
+        const userPrompt = `
+OPTIMIZE THIS PAGE FOR MAXIMUM SEO/GEO/AEO PERFORMANCE:
+
+═══════════════════════════════════════════════════════════════
+PAGE DETAILS
+═══════════════════════════════════════════════════════════════
 URL: ${pageData.url}
 Current Title: ${pageTitle}
-Target Keyword: ${targetKeyword || 'auto-detect based on content'}
+Target Keyword: ${targetKeyword || 'auto-detect the primary keyword from content'}
 Language: ${language || 'en'}
 Region: ${region || 'global'}
-Word Count: ${pageData.word_count || 'unknown'}
-${pageContent ? `\nContent Preview (first 3000 chars):\n${pageContent.substring(0, 3000)}` : ''}
+Current Word Count: ${pageData.word_count || 'unknown'}
 
-Generate comprehensive SEO optimization recommendations.`;
+═══════════════════════════════════════════════════════════════
+CURRENT CONTENT (analyze and transform this)
+═══════════════════════════════════════════════════════════════
+${pageContent ? pageContent.substring(0, 8000) : '[No content available - create comprehensive content based on URL/title]'}
 
-        logger.info('Calling AI for optimization');
+═══════════════════════════════════════════════════════════════
+YOUR TASK
+═══════════════════════════════════════════════════════════════
+1. Analyze the current content and identify the primary topic/keyword
+2. Research what makes top-ranking content for this topic
+3. Create a COMPLETE, COMPREHENSIVE rewrite with:
+   - ${effectiveAdvanced.minWordCount}-${effectiveAdvanced.maxWordCount} words (REQUIRED)
+   - 6-12 internal links with rich anchor text (REQUIRED)
+   - All special content boxes (TL;DR, Tips, Insights, etc.)
+   ${effectiveAdvanced.enableToc ? '- Table of Contents' : ''}
+   ${effectiveAdvanced.enableFaqs ? '- 5-7 FAQ section' : ''}
+   ${effectiveAdvanced.enableKeyTakeaways ? '- Key Takeaways box' : ''}
+   ${effectiveAdvanced.enableCtas ? '- Strong CTAs' : ''}
+   ${effectiveAdvanced.enableSchema ? '- Structured data schema' : ''}
+4. Make it 10x better than anything currently ranking
+
+Generate the COMPLETE optimized content now.`;
+
+        logger.info('Calling AI for optimization', { promptLength: userPrompt.length });
+
+        // Update job progress
+        if (jobId) {
+          await supabase.from('jobs').update({ current_step: 'generating_content', progress: 50 }).eq('id', jobId);
+        }
 
         // Build AI request based on provider
         const buildAIRequest = (): { url: string; headers: HeadersInit; body: string } => {
@@ -324,7 +549,6 @@ Generate comprehensive SEO optimization recommendations.`;
             { role: 'user', content: userPrompt },
           ];
 
-          // If user has configured their own AI provider, use it
           if (useUserAI && aiConfig) {
             const { provider, apiKey, model } = aiConfig;
 
@@ -342,7 +566,7 @@ Generate comprehensive SEO optimization recommendations.`;
                     ],
                     generationConfig: {
                       temperature: 0.7,
-                      maxOutputTokens: 24000,
+                      maxOutputTokens: 32000,
                     },
                   }),
                 };
@@ -358,7 +582,7 @@ Generate comprehensive SEO optimization recommendations.`;
                     model,
                     messages,
                     temperature: 0.7,
-                    max_tokens: 24000,
+                    max_tokens: 32000,
                   }),
                 };
 
@@ -374,7 +598,7 @@ Generate comprehensive SEO optimization recommendations.`;
                     model,
                     system: OPTIMIZATION_PROMPT,
                     messages: [{ role: 'user', content: userPrompt }],
-                    max_tokens: 24000,
+                    max_tokens: 32000,
                   }),
                 };
 
@@ -389,7 +613,7 @@ Generate comprehensive SEO optimization recommendations.`;
                     model,
                     messages,
                     temperature: 0.7,
-                    max_tokens: 24000,
+                    max_tokens: 32000,
                   }),
                 };
 
@@ -406,7 +630,7 @@ Generate comprehensive SEO optimization recommendations.`;
                     model,
                     messages,
                     temperature: 0.7,
-                    max_tokens: 24000,
+                    max_tokens: 32000,
                   }),
                 };
 
@@ -426,16 +650,16 @@ Generate comprehensive SEO optimization recommendations.`;
               model: 'google/gemini-2.5-flash',
               messages,
               temperature: 0.7,
-              max_tokens: 24000,
+              max_tokens: 32000,
             }),
           };
         };
 
         const aiRequest = buildAIRequest();
 
-        // Call AI with 45 second timeout and retry
+        // Call AI with 120 second timeout (longer content = more time)
         const aiController = new AbortController();
-        const aiTimeoutId = setTimeout(() => aiController.abort(), 45000);
+        const aiTimeoutId = setTimeout(() => aiController.abort(), 120000);
 
         let aiResponse: Response;
         try {
@@ -459,16 +683,17 @@ Generate comprehensive SEO optimization recommendations.`;
         } catch (aiErr) {
           clearTimeout(aiTimeoutId);
           if (aiErr instanceof Error && aiErr.name === 'AbortError') {
-            logger.error('AI request timeout after 45 seconds');
+            logger.error('AI request timeout after 120 seconds');
+            if (jobId) await supabase.from('jobs').update({ status: 'failed', error_message: 'Timeout' }).eq('id', jobId);
             await supabase.from('pages').update({ status: 'failed' }).eq('id', pageId);
-            await supabase.from('activity_log').insert({
-              page_id: pageId,
-              type: 'error',
-              message: 'AI request timeout after 45 seconds.',
-            });
-            throw new AppError('AI request timed out after 45 seconds. Try again.', 'AI_TIMEOUT', 504);
+            throw new AppError('AI request timed out after 120 seconds. Try again.', 'AI_TIMEOUT', 504);
           }
           throw aiErr;
+        }
+
+        // Update job progress
+        if (jobId) {
+          await supabase.from('jobs').update({ current_step: 'processing_response', progress: 80 }).eq('id', jobId);
         }
 
         if (!aiResponse.ok) {
@@ -476,11 +701,13 @@ Generate comprehensive SEO optimization recommendations.`;
           logger.error('AI error response', { status: aiResponse.status, body: errorText.substring(0, 500) });
           
           if (aiResponse.status === 429) {
+            if (jobId) await supabase.from('jobs').update({ status: 'failed', error_message: 'Rate limited' }).eq('id', jobId);
             await supabase.from('pages').update({ status: 'failed' }).eq('id', pageId);
             throw new AppError('Too many requests. Please try again later.', 'AI_RATE_LIMIT', 429);
           }
           
           if (aiResponse.status === 402) {
+            if (jobId) await supabase.from('jobs').update({ status: 'failed', error_message: 'Credits required' }).eq('id', jobId);
             await supabase.from('pages').update({ status: 'failed' }).eq('id', pageId);
             throw new AppError('Please add credits to your Lovable workspace.', 'CREDITS_REQUIRED', 402);
           }
@@ -494,13 +721,10 @@ Generate comprehensive SEO optimization recommendations.`;
         let aiContent: string | undefined;
         
         if (useUserAI && aiConfig?.provider === 'google') {
-          // Google Gemini API format
           aiContent = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
         } else if (useUserAI && aiConfig?.provider === 'anthropic') {
-          // Anthropic Claude API format
           aiContent = aiData.content?.[0]?.text;
         } else {
-          // OpenAI-compatible format (OpenAI, Groq, OpenRouter, Lovable AI Gateway)
           aiContent = aiData.choices?.[0]?.message?.content;
         }
 
@@ -509,23 +733,22 @@ Generate comprehensive SEO optimization recommendations.`;
           throw new AppError('No response from AI', 'AI_EMPTY_RESPONSE', 500);
         }
 
-        logger.info('AI response received, parsing');
+        logger.info('AI response received, parsing', { contentLength: aiContent.length });
 
-        // Parse AI response - extract JSON from potential markdown wrapper
+        // Parse AI response
         let optimization;
         try {
           let jsonStr = aiContent.trim();
 
-          // Remove markdown code blocks (handles ```json, ``` json, ```JSON, etc.)
+          // Remove markdown code blocks
           const codeBlockMatch = jsonStr.match(/```(?:json|JSON)?\s*\n?([\s\S]*?)\n?```/);
           if (codeBlockMatch) {
             jsonStr = codeBlockMatch[1].trim();
           } else if (jsonStr.startsWith('```')) {
-            // Fallback: just strip ``` from start and end
             jsonStr = jsonStr.replace(/^```(?:json|JSON)?\s*\n?/, '').replace(/\n?```\s*$/, '');
           }
 
-          // Try to find JSON object if there's extra text before/after
+          // Find JSON object
           if (!jsonStr.startsWith('{')) {
             const jsonStart = jsonStr.indexOf('{');
             if (jsonStart !== -1) {
@@ -543,10 +766,11 @@ Generate comprehensive SEO optimization recommendations.`;
           optimization = JSON.parse(jsonStr);
         } catch (e) {
           logger.error('Failed to parse AI response', { content: aiContent.substring(0, 500), error: e instanceof Error ? e.message : 'Unknown' });
+          if (jobId) await supabase.from('jobs').update({ status: 'failed', error_message: 'Parse error' }).eq('id', jobId);
           throw new AppError('Failed to parse AI optimization response', 'AI_PARSE_ERROR', 500);
         }
 
-        // Validate all required fields exist
+        // Validate required fields
         const requiredFields = ['optimizedTitle', 'metaDescription', 'h1', 'h2s', 'optimizedContent', 'contentStrategy', 'schema', 'qualityScore'];
         for (const field of requiredFields) {
           if (!optimization[field]) {
@@ -555,32 +779,30 @@ Generate comprehensive SEO optimization recommendations.`;
           }
         }
 
-        // Validate optimizedContent is not too short
-        if (!optimization.optimizedContent || optimization.optimizedContent.trim().length < 100) {
-          logger.error('optimizedContent too short', { length: optimization.optimizedContent?.length || 0 });
-          throw new AppError(`optimizedContent too short (${optimization.optimizedContent?.length || 0} chars)`, 'AI_CONTENT_TOO_SHORT', 500);
+        // Validate content length
+        const contentLength = optimization.optimizedContent?.length || 0;
+        if (contentLength < 5000) {
+          logger.error('optimizedContent too short', { length: contentLength });
+          throw new AppError(`Content too short (${contentLength} chars). Expected ${effectiveAdvanced.minWordCount}+ words.`, 'AI_CONTENT_TOO_SHORT', 500);
         }
 
-        logger.info('Validated response', { contentLength: optimization.optimizedContent.length });
+        logger.info('Validated response', { 
+          contentLength, 
+          wordCount: optimization.contentStrategy?.wordCount,
+          qualityScore: optimization.qualityScore,
+          internalLinks: optimization.internalLinks?.length,
+        });
 
-        // Create job record
-        const { data: job, error: jobError } = await supabase
-          .from('jobs')
-          .insert({
-            page_id: pageId,
+        // Update job to completed
+        if (jobId) {
+          await supabase.from('jobs').update({
             status: 'completed',
             current_step: 'optimization_complete',
             progress: 100,
-            started_at: new Date().toISOString(),
             completed_at: new Date().toISOString(),
             result: optimization,
             ai_tokens_used: aiData.usage?.total_tokens || 0,
-          })
-          .select()
-          .single();
-
-        if (jobError) {
-          logger.error('Failed to create job', { error: jobError.message });
+          }).eq('id', jobId);
         }
 
         // Update page with optimization results
@@ -597,6 +819,7 @@ Generate comprehensive SEO optimization recommendations.`;
           .update({
             status: 'completed',
             score_after: scoreAfter,
+            word_count: optimization.contentStrategy?.wordCount || 0,
             updated_at: new Date().toISOString(),
           })
           .eq('id', pageId);
@@ -606,18 +829,22 @@ Generate comprehensive SEO optimization recommendations.`;
           .from('activity_log')
           .insert({
             page_id: pageId,
-            job_id: job?.id,
+            job_id: jobId,
             type: 'success',
-            message: `Optimization completed with score ${optimization.qualityScore}`,
+            message: `Optimization completed: ${optimization.contentStrategy?.wordCount || 0} words, score ${optimization.qualityScore}, ${optimization.internalLinks?.length || 0} internal links`,
             details: {
               qualityScore: optimization.qualityScore,
+              wordCount: optimization.contentStrategy?.wordCount,
+              internalLinks: optimization.internalLinks?.length,
               estimatedRank: optimization.estimatedRankPosition,
-              improvements: optimization.aiSuggestions?.improvements?.length || 0,
               requestId: logger.getRequestId(),
             },
           });
 
-        logger.info('Successfully optimized page', { qualityScore: optimization.qualityScore });
+        logger.info('Successfully optimized page', { 
+          qualityScore: optimization.qualityScore,
+          wordCount: optimization.contentStrategy?.wordCount,
+        });
 
         return {
           success: true,
@@ -629,7 +856,6 @@ Generate comprehensive SEO optimization recommendations.`;
       300000 // 5 minute TTL for idempotency
     );
 
-    // If result was cached, log it
     if (cached) {
       logger.info('Returning cached optimization result', { pageId });
     }
@@ -645,7 +871,6 @@ Generate comprehensive SEO optimization recommendations.`;
       pageId 
     });
 
-    // Try to update page status to failed
     if (pageId) {
       try {
         await supabase.from('pages').update({ status: 'failed' }).eq('id', pageId);
