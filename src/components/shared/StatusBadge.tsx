@@ -44,7 +44,11 @@ const statusConfig: Record<
 };
 
 export function StatusBadge({ status, className }: StatusBadgeProps) {
-  const config = statusConfig[status];
+  const config = statusConfig[status] ?? {
+    icon: Circle,
+    label: status || 'Unknown',
+    className: 'text-muted-foreground bg-muted',
+  };
   const Icon = config.icon;
   const isAnimated = status === 'analyzing' || status === 'optimizing';
 
