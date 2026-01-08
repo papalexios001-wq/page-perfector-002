@@ -31,7 +31,6 @@ interface AIValidationResponse {
 const PROVIDER_CONFIGS: Record<AIProvider, { 
   name: string;
   testEndpoint: string;
-  modelsEndpoint?: string;
   buildRequest: (apiKey: string, model: string) => { headers: HeadersInit; body?: string };
 }> = {
   google: {
@@ -44,14 +43,13 @@ const PROVIDER_CONFIGS: Record<AIProvider, {
       },
       body: JSON.stringify({
         contents: [{ parts: [{ text: 'Hi' }] }],
-        generationConfig: { maxOutputTokens: 5 }
+        generationConfig: { maxOutputTokens: 1 }
       }),
     }),
   },
   openai: {
     name: 'OpenAI',
     testEndpoint: 'https://api.openai.com/v1/chat/completions',
-    modelsEndpoint: 'https://api.openai.com/v1/models',
     buildRequest: (apiKey, model) => ({
       headers: {
         'Content-Type': 'application/json',
@@ -60,7 +58,7 @@ const PROVIDER_CONFIGS: Record<AIProvider, {
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 5,
+        max_tokens: 1,
       }),
     }),
   },
@@ -76,14 +74,13 @@ const PROVIDER_CONFIGS: Record<AIProvider, {
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 5,
+        max_tokens: 1,
       }),
     }),
   },
   groq: {
     name: 'Groq',
     testEndpoint: 'https://api.groq.com/openai/v1/chat/completions',
-    modelsEndpoint: 'https://api.groq.com/openai/v1/models',
     buildRequest: (apiKey, model) => ({
       headers: {
         'Content-Type': 'application/json',
@@ -92,14 +89,13 @@ const PROVIDER_CONFIGS: Record<AIProvider, {
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 5,
+        max_tokens: 1,
       }),
     }),
   },
   openrouter: {
     name: 'OpenRouter',
     testEndpoint: 'https://openrouter.ai/api/v1/chat/completions',
-    modelsEndpoint: 'https://openrouter.ai/api/v1/models',
     buildRequest: (apiKey, model) => ({
       headers: {
         'Content-Type': 'application/json',
@@ -110,11 +106,27 @@ const PROVIDER_CONFIGS: Record<AIProvider, {
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 5,
+        max_tokens: 1,
       }),
     }),
   },
 };
+
+// Helper to fetch with timeout
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -167,12 +179,31 @@ serve(async (req) => {
 
     console.log(`[AI Validation] Testing endpoint: ${testUrl}`);
 
-    // Make test API call
-    const response = await fetch(testUrl, {
-      method: 'POST',
-      headers,
-      body,
-    });
+    // Make test API call with timeout
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(testUrl, {
+        method: 'POST',
+        headers,
+        body,
+      }, 8000);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.log(`[AI Validation] Request timed out for ${provider}`);
+        return new Response(
+          JSON.stringify({
+            success: false,
+            message: 'Request timed out',
+            provider: config.name,
+            model,
+            error: 'The API request timed out. Please try again.',
+            errorCode: 'TIMEOUT'
+          } as AIValidationResponse),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      throw err;
+    }
 
     const responseText = await response.text();
     console.log(`[AI Validation] Response status: ${response.status}`);
@@ -218,24 +249,10 @@ serve(async (req) => {
 
     try {
       const data = JSON.parse(responseText);
-      
-      // Extract model info based on provider
-      if (provider === 'openai' || provider === 'groq' || provider === 'openrouter') {
-        modelInfo = {
-          id: data.model || model,
-          name: data.model || model,
-        };
-      } else if (provider === 'anthropic') {
-        modelInfo = {
-          id: data.model || model,
-          name: data.model || model,
-        };
-      } else if (provider === 'google') {
-        modelInfo = {
-          id: model,
-          name: model,
-        };
-      }
+      modelInfo = {
+        id: data.model || model,
+        name: data.model || model,
+      };
     } catch {
       // Use default model info
     }
