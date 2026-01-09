@@ -656,4 +656,9 @@ export function PageQueue() {
     );
 
     if (completedPages.length === 0) {
-      toast.error('No
+      toast.error('No completed pages selected', {
+        description: 'Only optimized pages can be published.',
+      });
+      return;
+    }
+
