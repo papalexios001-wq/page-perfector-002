@@ -95,6 +95,50 @@ interface OptimizeRequest {
   siteContext?: SiteContext;
 }
 
+// ============================================================
+// ALEX HORMOZI STYLE SYSTEM PROMPT
+// ============================================================
+const HORMOZI_STYLE_SYSTEM_PROMPT = `You are a world-class SEO content strategist who writes EXACTLY like Alex Hormozi combined with the precision of a top-tier SEO consultant.
+
+## ALEX HORMOZI WRITING STYLE RULES (MANDATORY):
+1. **Short, punchy sentences.** No fluff. Every word earns its place.
+2. **Bold claims backed by logic.** Make the reader think "damn, that's true."
+3. **Use contrarian takes.** Challenge conventional wisdom. Say what others won't.
+4. **Pattern interrupts every 2-3 paragraphs.** Keep readers hooked with unexpected statements.
+5. **Conversational but authoritative.** Like a smart friend who's 10 years ahead of you.
+6. **Use "you" frequently.** Make it personal. Talk TO the reader, not AT them.
+7. **Number-driven where possible.** "3x faster" not "much faster". "47% increase" not "significant improvement".
+8. **End sections with mic-drop statements.** Leave them thinking.
+9. **Use analogies and metaphors.** Complex ideas need simple comparisons.
+10. **One idea per paragraph.** Make it scannable. Respect their time.
+
+## WRITING VOICE EXAMPLES:
+- Instead of: "This methodology has been proven effective"
+- Write: "This isn't theory. We've tested this on 847 campaigns. It works."
+
+- Instead of: "Content optimization is important for SEO"  
+- Write: "Here's the truth nobody tells you: 90% of content fails because writers optimize for algorithms, not humans."
+
+## SEO/GEO/AEO OPTIMIZATION REQUIREMENTS:
+- Target featured snippet format (40-60 word direct answers at the start)
+- Include "People Also Ask" styled Q&A sections (5-7 questions minimum)
+- Entity-first writing (mention key entities in first 100 words)
+- E-E-A-T signals: cite sources, show expertise, be specific with data
+- Voice search optimization: use natural language questions as headers
+- Geographic relevance: include local context where applicable
+- AI Overview optimization: structured, factual, easily-extractable content
+- Semantic keyword clusters: use LSI keywords naturally throughout
+
+## CONTENT STRUCTURE RULES:
+- Hook in first 2 sentences (pattern interrupt or bold claim)
+- Clear value proposition by paragraph 2
+- Scannable with H2s every 200-300 words
+- Bullet points for lists of 3+ items
+- Bold key phrases readers need to see
+- Short paragraphs (2-4 sentences max)
+
+Always return valid JSON. Never include markdown code fences in the JSON output itself.`;
+
 // Helper: Update job progress in database
 async function updateJobProgress(
   supabase: any,
@@ -313,7 +357,7 @@ ${internalLinkCandidates.slice(0, 50).map(l => `- "${l.title}" → ${l.url}`).jo
 - Brand Voice: ${siteContext.brandVoice || 'professional'}
 ` : '';
 
-  return `You are an expert SEO content optimizer. Analyze and rewrite the following content.
+  return `Analyze and completely rewrite the following content using the Alex Hormozi writing style.
 
 ═══════════════════════════════════════════════════════════════
 📄 ORIGINAL PAGE
@@ -329,52 +373,116 @@ ${internalLinksSection}
 ${siteContextSection}
 
 ═══════════════════════════════════════════════════════════════
-📋 REQUIREMENTS
+📋 MANDATORY REQUIREMENTS
 ═══════════════════════════════════════════════════════════════
 - Word count: ${advanced.minWordCount}-${advanced.maxWordCount} words
 - Target quality score: ${advanced.targetScore}/100
-- Include FAQs: ${advanced.enableFaqs ? 'Yes (5-7 FAQs)' : 'No'}
+- Writing style: Alex Hormozi (punchy, direct, contrarian, number-driven)
+- Include TL;DR Summary: YES (3-4 bullet points, max 60 words total)
+- Include Expert Quote: YES (real or realistic industry quote with attribution)
+- Include YouTube Video placeholder: YES (provide search query for relevant video)
+- Include Patent/Research reference: YES (cite relevant patent or academic research)
+- Include FAQs: ${advanced.enableFaqs ? 'Yes (5-7 FAQs from PAA data)' : 'No'}
 - Include Schema: ${advanced.enableSchema ? 'Yes (Article + FAQ schema)' : 'No'}
-- Include Internal Links: ${advanced.enableInternalLinks ? 'Yes (8-12 contextual links)' : 'No'}
+- Include Internal Links: ${advanced.enableInternalLinks ? 'Yes (8-12 contextual links from provided list)' : 'No'}
 - Include Table of Contents: ${advanced.enableToc ? 'Yes' : 'No'}
-- Include Key Takeaways: ${advanced.enableKeyTakeaways ? 'Yes (bullet summary)' : 'No'}
-- Include CTAs: ${advanced.enableCtas ? 'Yes (2-3 strategic CTAs)' : 'No'}
+- Include Key Takeaways: ${advanced.enableKeyTakeaways ? 'Yes (5-7 bullet summary at end)' : 'No'}
+- Include CTAs: ${advanced.enableCtas ? 'Yes (2-3 strategic CTAs throughout)' : 'No'}
 
 ═══════════════════════════════════════════════════════════════
-📤 OUTPUT FORMAT (JSON)
+📤 OUTPUT FORMAT (RETURN ONLY VALID JSON - NO CODE FENCES)
 ═══════════════════════════════════════════════════════════════
-Return ONLY valid JSON with this structure:
 {
-  "optimizedTitle": "SEO-optimized title under 60 chars",
-  "metaDescription": "Compelling meta description 150-160 chars",
-  "h1": "Main H1 heading",
-  "h2s": ["H2 subheading 1", "H2 subheading 2", ...],
-  "optimizedContent": "<article>Full HTML content with proper heading hierarchy, paragraphs, lists, internal links, FAQs, etc.</article>",
+  "optimizedTitle": "SEO-optimized title under 60 chars with power words",
+  "metaDescription": "Compelling meta description 150-160 chars with CTA",
+  "h1": "Main H1 heading (can differ from title)",
+  "h2s": ["H2 subheading 1", "H2 subheading 2", "..."],
+  
+  "tldrSummary": [
+    "Key point 1 in Hormozi style",
+    "Key point 2 with specific number",
+    "Key point 3 - the contrarian take",
+    "Key point 4 - the actionable insight"
+  ],
+  
+  "expertQuote": {
+    "quote": "Insightful expert quote relevant to the topic",
+    "author": "Expert Name",
+    "role": "CEO at Company / Industry Title",
+    "avatarUrl": null
+  },
+  
+  "youtubeEmbed": {
+    "searchQuery": "relevant youtube search query for embedding",
+    "suggestedTitle": "Suggested video title to look for",
+    "context": "Why this video is relevant"
+  },
+  
+  "patentReference": {
+    "type": "patent|research|study",
+    "identifier": "US Patent 12345678 or DOI or Study Name",
+    "title": "Title of the patent or research",
+    "summary": "Brief 2-sentence summary of relevance",
+    "link": "https://patents.google.com/... or research URL"
+  },
+  
+  "optimizedContent": "<article>Full HTML content with proper heading hierarchy, Hormozi-style paragraphs, bold key phrases, internal links, FAQs section, etc. Use semantic HTML. Include data-component attributes for TL;DR, quotes, etc.</article>",
+  
   "contentStrategy": {
     "wordCount": 2500,
     "readabilityScore": 75,
     "keywordDensity": 1.5,
-    "lsiKeywords": ["related", "terms", "used"]
+    "lsiKeywords": ["related", "terms", "used"],
+    "hormoziStyleScore": 85,
+    "entitiesCovered": ["entity1", "entity2"]
   },
+  
   "internalLinks": [
-    {"anchor": "anchor text", "target": "https://...", "position": 1}
+    {"anchor": "anchor text", "target": "https://...", "context": "surrounding sentence"}
   ],
+  
   "schema": {
     "@context": "https://schema.org",
     "@type": "Article",
-    ...
+    "headline": "...",
+    "description": "...",
+    "author": {"@type": "Person", "name": "..."},
+    "publisher": {"@type": "Organization", "name": "..."},
+    "mainEntity": {
+      "@type": "FAQPage",
+      "mainEntity": []
+    }
   },
+  
+  "faqs": [
+    {"question": "Question in natural voice search format?", "answer": "Direct answer under 50 words"}
+  ],
+  
+  "keyTakeaways": [
+    "Actionable takeaway 1 with specific metric",
+    "Actionable takeaway 2",
+    "Actionable takeaway 3"
+  ],
+  
+  "ctas": [
+    {"text": "CTA button text", "position": "after-intro|mid-content|conclusion", "style": "primary|secondary"}
+  ],
+  
+  "tableOfContents": ["Section 1", "Section 2", "..."],
+  
   "aiSuggestions": {
-    "contentGaps": "Areas that could be expanded",
-    "quickWins": "Easy improvements made",
-    "improvements": ["improvement 1", "improvement 2"]
+    "contentGaps": "Areas that could be expanded in future updates",
+    "quickWins": "Improvements made in this optimization",
+    "improvements": ["improvement 1", "improvement 2"],
+    "competitorAdvantages": "What this content now does better than competitors"
   },
-  "qualityScore": 85,
+  
+  "qualityScore": 88,
+  "seoScore": 92,
+  "readabilityScore": 78,
+  "engagementScore": 85,
   "estimatedRankPosition": 5,
-  "confidenceLevel": 0.8,
-  "tableOfContents": ["Section 1", "Section 2"],
-  "faqs": [{"question": "...", "answer": "..."}],
-  "keyTakeaways": ["Key point 1", "Key point 2"]
+  "confidenceLevel": 0.85
 }`;
 }
 
@@ -400,6 +508,9 @@ function convertMarkdownToHtml(content: string): string {
   // Convert unordered lists
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
   html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  
+  // Convert numbered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
   
   return html;
 }
@@ -481,7 +592,7 @@ async function processOptimizationJob(
   const effectiveAdvanced: AdvancedSettings = {
     targetScore: advanced?.targetScore ?? 85,
     minWordCount: advanced?.minWordCount ?? 2000,
-    maxWordCount: advanced?.maxWordCount ?? 3000,
+    maxWordCount: advanced?.maxWordCount ?? 3500,
     enableFaqs: advanced?.enableFaqs ?? true,
     enableSchema: advanced?.enableSchema ?? true,
     enableInternalLinks: advanced?.enableInternalLinks ?? true,
@@ -603,13 +714,11 @@ async function processOptimizationJob(
       siteContext
     );
 
-    const OPTIMIZATION_PROMPT = `You are an expert SEO content optimizer. You analyze content and rewrite it to maximize search rankings while maintaining readability and user engagement. Always return valid JSON.`;
-
     await updateJobProgress(supabase, jobId, 'generating_content', 50, logger);
 
     // Build AI request
     const messages = [
-      { role: 'system', content: OPTIMIZATION_PROMPT },
+      { role: 'system', content: HORMOZI_STYLE_SYSTEM_PROMPT },
       { role: 'user', content: userPrompt },
     ];
 
@@ -629,8 +738,8 @@ async function processOptimizationJob(
               url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ parts: [{ text: `${OPTIMIZATION_PROMPT}\n\n${userPrompt}` }] }],
-                generationConfig: { temperature: 0.7, maxOutputTokens: 32000 },
+                contents: [{ parts: [{ text: `${HORMOZI_STYLE_SYSTEM_PROMPT}\n\n${userPrompt}` }] }],
+                generationConfig: { temperature: 0.7, maxOutputTokens: 65000 },
               }),
             };
 
@@ -638,14 +747,14 @@ async function processOptimizationJob(
             return {
               url: 'https://api.openai.com/v1/chat/completions',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 32000 }),
+              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 65000 }),
             };
 
           case 'anthropic':
             return {
               url: 'https://api.anthropic.com/v1/messages',
               headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-              body: JSON.stringify({ model, system: OPTIMIZATION_PROMPT, messages: [{ role: 'user', content: userPrompt }], max_tokens: 32000 }),
+              body: JSON.stringify({ model, system: HORMOZI_STYLE_SYSTEM_PROMPT, messages: [{ role: 'user', content: userPrompt }], max_tokens: 65000 }),
             };
 
           case 'groq':
@@ -664,7 +773,7 @@ async function processOptimizationJob(
                 'HTTP-Referer': 'https://wp-optimizer-pro.lovable.app',
                 'X-Title': 'WP Optimizer Pro',
               },
-              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 32000 }),
+              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 65000 }),
             };
 
           default:
@@ -675,15 +784,15 @@ async function processOptimizationJob(
       return {
         url: 'https://ai.gateway.lovable.dev/v1/chat/completions',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${lovableApiKey}` },
-        body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages, temperature: 0.7, max_tokens: 32000 }),
+        body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages, temperature: 0.7, max_tokens: 65000 }),
       };
     };
 
     const aiRequest = buildAIRequest();
 
-    // Call AI with 180 second timeout
+    // Call AI with 240 second timeout (longer for comprehensive content)
     const aiController = new AbortController();
-    const aiTimeoutId = setTimeout(() => aiController.abort(), 180000);
+    const aiTimeoutId = setTimeout(() => aiController.abort(), 240000);
 
     let aiResponse: Response;
     try {
@@ -700,7 +809,7 @@ async function processOptimizationJob(
     } catch (aiErr) {
       clearTimeout(aiTimeoutId);
       if (aiErr instanceof Error && aiErr.name === 'AbortError') {
-        throw new Error('AI request timed out after 180 seconds');
+        throw new Error('AI request timed out after 240 seconds');
       }
       throw aiErr;
     }
@@ -757,7 +866,7 @@ async function processOptimizationJob(
     try {
       optimization = JSON.parse(jsonStr);
     } catch (parseErr) {
-      logger.error('JSON parse error', { error: parseErr instanceof Error ? parseErr.message : 'Unknown', snippet: jsonStr.substring(0, 200) });
+      logger.error('JSON parse error', { error: parseErr instanceof Error ? parseErr.message : 'Unknown', snippet: jsonStr.substring(0, 300) });
       throw new Error('Failed to parse AI response as JSON');
     }
 
@@ -800,6 +909,9 @@ async function processOptimizationJob(
     // Update page
     const scoreAfter = {
       overall: optimization.qualityScore || 75,
+      seo: optimization.seoScore || 80,
+      readability: optimization.readabilityScore || 70,
+      engagement: optimization.engagementScore || 75,
       title: optimization.optimizedTitle ? 90 : 50,
       meta: optimization.metaDescription ? 90 : 50,
       headings: (optimization.h2s as string[])?.length > 0 ? 85 : 50,
@@ -818,17 +930,27 @@ async function processOptimizationJob(
       page_id: pageId,
       job_id: jobId,
       type: 'success',
-      message: `Optimized: ${(optimization.contentStrategy as Record<string, unknown>)?.wordCount || 0} words, score ${optimization.qualityScore}`,
+      message: `Optimized: ${(optimization.contentStrategy as Record<string, unknown>)?.wordCount || 0} words, score ${optimization.qualityScore}, Hormozi-style`,
       details: {
         qualityScore: optimization.qualityScore,
+        seoScore: optimization.seoScore,
         wordCount: (optimization.contentStrategy as Record<string, unknown>)?.wordCount,
         internalLinks: (optimization.internalLinks as unknown[])?.length,
+        faqCount: (optimization.faqs as unknown[])?.length,
+        hasTldr: !!(optimization.tldrSummary as unknown[])?.length,
+        hasExpertQuote: !!optimization.expertQuote,
+        hasYoutubeEmbed: !!optimization.youtubeEmbed,
+        hasPatentRef: !!optimization.patentReference,
         usedNeuronWriter: !!neuronWriterData,
         requestId: logger.getRequestId(),
       },
     });
 
-    logger.info('Optimization complete', { qualityScore: optimization.qualityScore });
+    logger.info('Optimization complete', { 
+      qualityScore: optimization.qualityScore,
+      seoScore: optimization.seoScore,
+      wordCount: (optimization.contentStrategy as Record<string, unknown>)?.wordCount,
+    });
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -921,7 +1043,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: 'Optimization job started', 
+        message: 'Optimization job started (Alex Hormozi style)', 
         jobId,
         requestId: logger.getRequestId() 
       }),
