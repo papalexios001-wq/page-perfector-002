@@ -1,15 +1,49 @@
+// supabase/functions/optimize-content/index.ts
+// ENTERPRISE-GRADE CONTENT OPTIMIZATION ENGINE v2.0
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import {
-  Logger,
-  withRetry,
-  corsHeaders,
-  AppError,
-  createErrorResponse,
-  validateRequired,
-  checkRateLimit,
-} from "../_shared/utils.ts";
 
+// ============================================================
+// SHARED UTILITIES
+// ============================================================
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+class Logger {
+  private functionName: string;
+  private requestId: string;
+  private startTime: number;
+
+  constructor(functionName: string, requestId?: string) {
+    this.functionName = functionName;
+    this.requestId = requestId || crypto.randomUUID();
+    this.startTime = Date.now();
+  }
+
+  private log(level: string, message: string, data?: Record<string, unknown>) {
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level,
+      function: this.functionName,
+      requestId: this.requestId,
+      message,
+      data,
+      duration: Date.now() - this.startTime,
+    }));
+  }
+
+  info(message: string, data?: Record<string, unknown>) { this.log('info', message, data); }
+  warn(message: string, data?: Record<string, unknown>) { this.log('warn', message, data); }
+  error(message: string, data?: Record<string, unknown>) { this.log('error', message, data); }
+  getRequestId() { return this.requestId; }
+}
+
+// ============================================================
+// TYPE DEFINITIONS
+// ============================================================
 type AIProvider = 'google' | 'openai' | 'anthropic' | 'groq' | 'openrouter';
 
 interface AIConfig {
@@ -57,11 +91,6 @@ interface NeuronWriterRecommendations {
   contentTerms?: string;
   extendedTerms?: string;
   entities?: string;
-  termsDetailed?: {
-    title: Array<{ t: string; usage_pc: number }>;
-    content: Array<{ t: string; usage_pc: number; sugg_usage?: [number, number] }>;
-    entities: Array<{ t: string; importance: number; relevance: number; confidence: number }>;
-  };
   questions?: {
     suggested: string[];
     peopleAlsoAsk: string[];
@@ -95,65 +124,311 @@ interface OptimizeRequest {
   siteContext?: SiteContext;
 }
 
+interface OptimizationResult {
+  optimizedTitle: string;
+  metaDescription: string;
+  h1: string;
+  h2s: string[];
+  tldrSummary?: string[];
+  expertQuote?: {
+    quote: string;
+    author: string;
+    role: string;
+    avatarUrl?: string | null;
+  };
+  youtubeEmbed?: {
+    searchQuery: string;
+    suggestedTitle: string;
+    context: string;
+  };
+  patentReference?: {
+    type: 'patent' | 'research' | 'study';
+    identifier: string;
+    title: string;
+    summary: string;
+    link?: string;
+  };
+  optimizedContent: string;
+  faqs?: Array<{ question: string; answer: string }>;
+  keyTakeaways?: string[];
+  ctas?: Array<{ text: string; position: string; style: 'primary' | 'secondary' }>;
+  tableOfContents?: string[];
+  contentStrategy: {
+    wordCount: number;
+    readabilityScore: number;
+    keywordDensity: number;
+    lsiKeywords: string[];
+  };
+  internalLinks: Array<{ anchor: string; target: string; position: number }>;
+  schema: Record<string, unknown>;
+  aiSuggestions: {
+    contentGaps: string;
+    quickWins: string;
+    improvements: string[];
+  };
+  qualityScore: number;
+  seoScore: number;
+  readabilityScore: number;
+  engagementScore: number;
+  estimatedRankPosition: number;
+  confidenceLevel: number;
+}
+
 // ============================================================
-// ULTRA-HIGH-QUALITY ALEX HORMOZI STYLE SYSTEM PROMPT
+// 🔥 ULTRA SEO/GEO/AEO SYSTEM PROMPT - ALEX HORMOZI STYLE
 // ============================================================
-const HORMOZI_STYLE_SYSTEM_PROMPT = `You are the world's #1 SEO content strategist who writes EXACTLY like Alex Hormozi - direct, punchy, value-packed, and impossible to stop reading.
+const ULTRA_SEO_GEO_AEO_SYSTEM_PROMPT = `You are the world's #1 SEO/GEO/AEO content architect who writes EXACTLY like Alex Hormozi while engineering content for maximum AI visibility and search rankings.
 
-## ⚠️ CRITICAL WORD COUNT REQUIREMENT ⚠️
-You MUST generate content that meets the EXACT word count specified. This is NON-NEGOTIABLE.
-- Count every word in your optimizedContent field
-- If asked for 2500-3000 words, you MUST deliver AT LEAST 2500 words
-- Pad with MORE value, MORE examples, MORE sections if needed
-- NEVER deliver less than the minimum word count
+## ⚠️ NON-NEGOTIABLE RULES ⚠️
 
-## ALEX HORMOZI WRITING STYLE (FOLLOW EXACTLY):
+### WORD COUNT ENFORCEMENT
+- You MUST hit the exact word count range specified
+- Count EVERY word in optimizedContent
+- If under minimum, ADD MORE VALUE (not fluff)
+- Add depth, examples, data, case studies
+- This is STRICTLY ENFORCED - no exceptions
 
-### Voice & Tone:
-1. **Short, punchy sentences.** No fluff. Every word earns its place.
-2. **Bold claims backed by logic.** Make readers think "damn, that's true."
-3. **Contrarian takes.** Challenge conventional wisdom. Say what others won't.
-4. **Pattern interrupts every 2-3 paragraphs.** Unexpected statements keep readers hooked.
-5. **Conversational but authoritative.** Like a smart friend 10 years ahead explaining something important.
-6. **Use "you" constantly.** Make it personal. Talk TO the reader, not AT them.
-7. **Number-driven.** "3x faster" not "much faster". "47% increase" not "significant improvement".
-8. **Mic-drop endings.** Every section ends with a quotable statement.
-9. **Analogies everywhere.** Complex = simple comparisons.
-10. **One idea per paragraph.** Scannable. Respect their time.
+### ALEX HORMOZI WRITING DNA (COPY EXACTLY):
 
-### Hormozi Phrases to Use:
-- "Here's the truth nobody tells you..."
-- "Most people think X. They're wrong. Here's why..."
-- "This isn't theory. We've tested this on [number] [things]. It works."
-- "Let me break this down..."
-- "The math is simple..."
-- "Here's the thing..."
-- "Stop doing X. Start doing Y."
-- "The difference between [good] and [great] is..."
+1. **Opening Hook Pattern**: 
+   - "Here's what [authority] won't tell you about [topic]..."
+   - "Most people are dead wrong about [topic]. Here's the truth."
+   - Bold claim in first sentence that makes them NEED to keep reading
 
-### Content Structure:
-- Hook in first 2 sentences (pattern interrupt or bold claim)
-- Value proposition by paragraph 2
-- H2 every 200-300 words MAXIMUM
-- Bullet points for 3+ items (NEVER inline lists)
-- Bold 1-2 key phrases per paragraph
-- Short paragraphs (2-4 sentences max, often 1-2)
+2. **Sentence Structure**:
+   - One idea = One paragraph (2-4 sentences MAX, often 1-2)
+   - Short. Punchy. Direct.
+   - No fluff. Every word earns its place.
 
-## SEO/GEO/AEO OPTIMIZATION:
-- Featured snippet format (40-60 word direct answers)
-- PAA-style Q&A sections (5-7 questions)
-- Entity-first writing (key entities in first 100 words)
-- E-E-A-T signals throughout
-- Voice search optimization
-- AI Overview optimization
+3. **Pattern Interrupts EVERY 200 Words**:
+   - Surprising stat
+   - Rhetorical question
+   - Bold claim
+   - "Here's the thing..."
 
-## OUTPUT RULES:
-- Return ONLY valid JSON
-- NO markdown code fences in the JSON
-- HTML in optimizedContent must be semantic and styled
-- Include ALL required sections`;
+4. **Numbers > Vague Words**:
+   - "3x faster" NOT "much faster"
+   - "$47,000 saved" NOT "significant savings"
+   - "In 23 minutes" NOT "quickly"
 
-// Helper functions
+5. **Contrarian Positioning**:
+   - Challenge the common belief
+   - Then prove why you're right with logic/data
+
+6. **Mic-Drop Endings**:
+   - Every H2 section ends with a quotable statement
+   - Make them want to screenshot and share
+
+7. **Personal Address**:
+   - Use "you" 3x more than "we" or "I"
+   - Talk TO the reader, not AT them
+
+8. **Hormozi Signature Phrases**:
+   - "Here's the truth nobody tells you..."
+   - "Most people think X. They're wrong."
+   - "The math is simple..."
+   - "Let me break this down..."
+   - "Stop doing X. Start doing Y."
+   - "This isn't theory. We've tested this."
+
+### GEO/AEO OPTIMIZATION (AI Overviews & LLM Citations):
+
+1. **Featured Snippet Format** (40-60 words):
+   - First paragraph under each H2 MUST directly answer "What is [topic]?"
+   - Clear, concise, extractable answer
+
+2. **Entity-First Writing**:
+   - Name key entities in first 100 words
+   - Wikipedia-style definitions for complex terms
+   - "In simple terms: [1-sentence definition]"
+
+3. **Structured Data Hooks**:
+   - Include "According to [Source]..." statements
+   - Reference studies, patents, research
+   - Makes content citable by AI
+
+4. **Question-Answer Pairs**:
+   - Every H2 should be phrased as a question users ask
+   - Direct answer in first 50 words
+
+5. **Comparison Tables**:
+   - Include at least 1 comparison table
+   - AI LOVES extracting tabular data
+
+6. **Step-by-Step Lists**:
+   - Numbered steps for any process
+   - AI Overviews heavily favor numbered lists
+
+### MANDATORY CONTENT BLOCKS (USE ALL):
+
+#### 1. TL;DR SUMMARY BOX (IMMEDIATELY AFTER H1)
+\`\`\`html
+<div class="wp-opt-tldr">
+  <strong>⚡ TL;DR — The Bottom Line</strong>
+  <ul>
+    <li>💡 [Specific insight with number]</li>
+    <li>🎯 [Contrarian take that challenges assumptions]</li>
+    <li>⚡ [Actionable tip they can use TODAY]</li>
+    <li>🔥 [Mic-drop statement that makes them think]</li>
+    <li>📈 [Result/outcome they can expect]</li>
+  </ul>
+</div>
+\`\`\`
+
+#### 2. TABLE OF CONTENTS
+\`\`\`html
+<nav class="wp-opt-toc">
+  <strong>📚 What You'll Learn</strong>
+  <ul>
+    <li><a href="#section-1">[H2 Title]</a></li>
+    <!-- Link to each H2 -->
+  </ul>
+</nav>
+\`\`\`
+
+#### 3. EXPERT QUOTE BOX (After first section)
+\`\`\`html
+<blockquote class="wp-opt-quote">
+  <p>"[Real quote from industry expert - Google it if needed]"</p>
+  <cite>— [Name], [Title] at [Company]</cite>
+</blockquote>
+\`\`\`
+
+#### 4. KEY INSIGHT BOXES (2-3 throughout)
+\`\`\`html
+<div class="wp-opt-insight">
+  <strong>💡 Key Insight</strong>
+  <p>[Non-obvious observation backed by data]</p>
+</div>
+\`\`\`
+
+#### 5. STAT/DATA CALLOUTS
+\`\`\`html
+<div class="wp-opt-stat">
+  <strong>[BIG NUMBER]%</strong>
+  <p>[What this number means for the reader]</p>
+</div>
+\`\`\`
+
+#### 6. COMPARISON TABLE
+\`\`\`html
+<div class="wp-opt-comparison">
+  <table>
+    <thead><tr><th>Factor</th><th>Option A</th><th>Option B</th></tr></thead>
+    <tbody>[Real data comparisons]</tbody>
+  </table>
+</div>
+\`\`\`
+
+#### 7. PRO TIP BOXES
+\`\`\`html
+<div class="wp-opt-tip">
+  <strong>💰 Pro Tip</strong>
+  <p>[Insider knowledge that saves time/money]</p>
+</div>
+\`\`\`
+
+#### 8. WARNING BOXES
+\`\`\`html
+<div class="wp-opt-warning">
+  <strong>⚠️ Common Mistake</strong>
+  <p>[What to avoid and why]</p>
+</div>
+\`\`\`
+
+#### 9. VIDEO RECOMMENDATION
+\`\`\`html
+<div class="wp-opt-video">
+  <strong>🎬 Watch This</strong>
+  <p>Search YouTube: "[specific search query]"</p>
+  <p>[Why this video adds value]</p>
+</div>
+\`\`\`
+
+#### 10. RESEARCH REFERENCE
+\`\`\`html
+<div class="wp-opt-research">
+  <strong>📊 The Research Says</strong>
+  <p><strong>[Study/Patent]:</strong> [Title]</p>
+  <p>[Key finding in plain English]</p>
+</div>
+\`\`\`
+
+#### 11. FAQ SECTION (PAA Format)
+\`\`\`html
+<div class="wp-opt-faq" itemscope itemtype="https://schema.org/FAQPage">
+  <h2>Frequently Asked Questions</h2>
+  <div itemscope itemprop="mainEntity" itemtype="https://schema.org/Question">
+    <h3 itemprop="name">[Question from PAA?]</h3>
+    <div itemscope itemprop="acceptedAnswer" itemtype="https://schema.org/Answer">
+      <p itemprop="text">[Direct 40-60 word answer]</p>
+    </div>
+  </div>
+  <!-- Repeat for 5-7 questions -->
+</div>
+\`\`\`
+
+#### 12. KEY TAKEAWAYS BOX (Before conclusion)
+\`\`\`html
+<div class="wp-opt-takeaways">
+  <strong>🎯 Key Takeaways</strong>
+  <ul>
+    <li>✅ [Actionable takeaway 1]</li>
+    <li>✅ [Actionable takeaway 2]</li>
+    <li>✅ [Actionable takeaway 3]</li>
+    <li>✅ [Actionable takeaway 4]</li>
+    <li>✅ [Actionable takeaway 5]</li>
+  </ul>
+</div>
+\`\`\`
+
+#### 13. CTA BOXES (3 placements: after-intro, mid-content, conclusion)
+\`\`\`html
+<div class="wp-opt-cta">
+  <strong>[Compelling headline with urgency]</strong>
+  <p>[Value proposition - what they get]</p>
+  <a href="#">[Action Button Text] →</a>
+</div>
+\`\`\`
+
+### INTERNAL LINKING STRATEGY:
+- 10-15 contextual internal links MINIMUM
+- Anchor text = exact or partial keyword match
+- Link in first 100 words, middle, and last 200 words
+- ONLY use URLs from the provided internal links list
+- DO NOT invent or create URLs
+
+### SCHEMA MARKUP:
+Include complete JSON-LD with:
+- Article schema
+- FAQPage schema (if FAQs included)
+- BreadcrumbList schema
+- Organization schema
+
+### OUTPUT FORMAT:
+Return ONLY valid JSON. No markdown code fences around the JSON.
+The optimizedContent field should contain fully-rendered HTML with all content blocks.
+
+## QUALITY CHECKLIST (ALL MUST PASS):
+☑️ Word count within specified range
+☑️ TL;DR summary included
+☑️ 5+ H2 headings (every 200-300 words)
+☑️ 10+ internal links (if provided)
+☑️ 5-7 FAQs in PAA format
+☑️ Key takeaways section
+☑️ Expert quote with attribution
+☑️ At least 1 comparison table
+☑️ Research/data reference
+☑️ YouTube video suggestion
+☑️ 3 CTA placements
+☑️ Hormozi writing style throughout
+☑️ Featured snippet format answers
+☑️ Entity definitions in first 100 words`;
+
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+
 async function updateJobProgress(
   supabase: ReturnType<typeof createClient>,
   jobId: string,
@@ -167,9 +442,9 @@ async function updateJobProgress(
       progress,
       status: 'running',
     }).eq('id', jobId);
-    logger.info(`Job progress: ${step} (${progress}%)`);
+    logger.info(`Progress: ${step} (${progress}%)`);
   } catch (e) {
-    logger.warn('Failed to update job progress', { error: e instanceof Error ? e.message : 'Unknown' });
+    logger.warn('Failed to update progress');
   }
 }
 
@@ -194,12 +469,11 @@ async function markJobFailed(
       job_id: jobId,
       type: 'error',
       message: `Failed: ${errorMessage}`,
-      details: { requestId: logger.getRequestId() },
     });
 
-    logger.error('Job marked as failed', { jobId, pageId, errorMessage });
+    logger.error('Job failed', { errorMessage });
   } catch (e) {
-    logger.error('Failed to mark job as failed', { error: e instanceof Error ? e.message : 'Unknown' });
+    logger.error('Failed to mark job as failed');
   }
 }
 
@@ -218,6 +492,81 @@ function deriveKeyword(title: string, slug: string): string {
   return keyword.substring(0, 100);
 }
 
+async function fetchPageContent(
+  siteUrl: string,
+  pageUrl: string,
+  username: string,
+  applicationPassword: string,
+  logger: Logger
+): Promise<{ title: string; content: string; postId?: number }> {
+  const normalizedUrl = siteUrl.replace(/\/+$/, '');
+  const authHeader = 'Basic ' + btoa(`${username}:${applicationPassword.replace(/\s+/g, '')}`);
+  
+  const slug = pageUrl.split('/').filter(Boolean).pop() || '';
+  const apiUrl = `${normalizedUrl}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&context=edit`;
+  
+  logger.info('Fetching page content', { apiUrl });
+  
+  const response = await fetch(apiUrl, {
+    headers: {
+      'Accept': 'application/json',
+      'Authorization': authHeader,
+      'User-Agent': 'WP-Optimizer-Pro/2.0',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch page: ${response.status}`);
+  }
+
+  const posts = await response.json();
+  if (!posts || posts.length === 0) {
+    throw new Error('Page not found');
+  }
+
+  const post = posts[0];
+  return {
+    title: post.title?.raw || post.title?.rendered || '',
+    content: post.content?.raw || post.content?.rendered || '',
+    postId: post.id,
+  };
+}
+
+async function fetchInternalLinks(
+  supabase: ReturnType<typeof createClient>,
+  siteId: string | null,
+  currentPageId: string,
+  logger: Logger
+): Promise<InternalLinkCandidate[]> {
+  try {
+    let query = supabase
+      .from('pages')
+      .select('url, slug, title')
+      .neq('id', currentPageId)
+      .limit(100);
+
+    if (siteId) {
+      query = query.eq('site_id', siteId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      logger.warn('Failed to fetch internal links', { error: error.message });
+      return [];
+    }
+
+    return (data || []).map(p => ({
+      url: p.url,
+      slug: p.slug,
+      title: p.title,
+    }));
+  } catch (e) {
+    logger.warn('Error fetching internal links');
+    return [];
+  }
+}
+
 async function fetchNeuronWriterRecommendations(
   supabaseUrl: string,
   supabaseKey: string,
@@ -231,10 +580,10 @@ async function fetchNeuronWriterRecommendations(
   const maxAttempts = 12;
   const pollInterval = 10000;
 
-  logger.info('Creating NeuronWriter query', { keyword, projectId: neuronWriter.projectId });
+  logger.info('Fetching NeuronWriter recommendations', { keyword });
 
   try {
-    const createResponse = await fetch(`${supabaseUrl}/functions/v1/neuronwriter`, {
+    const response = await fetch(`${supabaseUrl}/functions/v1/neuronwriter`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -244,34 +593,33 @@ async function fetchNeuronWriterRecommendations(
         action: 'get-recommendations',
         apiKey: neuronWriter.apiKey,
         projectId: neuronWriter.projectId,
-        keyword: keyword,
+        keyword,
         language: language || 'English',
       }),
     });
 
-    if (!createResponse.ok) {
-      logger.warn('NeuronWriter initial request failed', { status: createResponse.status });
+    if (!response.ok) {
+      logger.warn('NeuronWriter request failed');
       return null;
     }
 
-    let data = await createResponse.json();
+    let data = await response.json();
 
     if (data.status === 'ready') {
-      logger.info('NeuronWriter data ready immediately');
+      logger.info('NeuronWriter data ready');
       return data;
     }
 
     if (!data.queryId) {
-      logger.warn('NeuronWriter did not return queryId');
       return null;
     }
 
     const queryId = data.queryId;
-    logger.info('NeuronWriter query created, polling...', { queryId });
+    logger.info('Polling NeuronWriter...', { queryId });
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise(r => setTimeout(r, pollInterval));
-      await updateJobProgress(supabase, jobId, 'waiting_neuronwriter', 30 + attempt, logger);
+      await updateJobProgress(supabase, jobId, 'waiting_neuronwriter', 30 + attempt * 2, logger);
 
       const pollResponse = await fetch(`${supabaseUrl}/functions/v1/neuronwriter`, {
         method: 'POST',
@@ -280,28 +628,25 @@ async function fetchNeuronWriterRecommendations(
           'Authorization': `Bearer ${supabaseKey}`,
         },
         body: JSON.stringify({
-          action: 'get-recommendations',
+          action: 'get-query',
           apiKey: neuronWriter.apiKey,
-          projectId: neuronWriter.projectId,
-          queryId: queryId,
+          queryId,
         }),
       });
 
       if (pollResponse.ok) {
         data = await pollResponse.json();
-        if (data.status === 'ready') {
-          logger.info('NeuronWriter data ready after polling', { attempt });
-          return data;
+        if (data.status === 'ready' || data.recommendations?.status === 'ready') {
+          logger.info('NeuronWriter ready after polling');
+          return data.recommendations || data;
         }
       }
-
-      logger.info('NeuronWriter still processing', { attempt, status: data.status });
     }
 
-    logger.warn('NeuronWriter timed out after max attempts');
+    logger.warn('NeuronWriter timeout');
     return null;
   } catch (error) {
-    logger.error('NeuronWriter fetch error', { error: error instanceof Error ? error.message : 'Unknown' });
+    logger.error('NeuronWriter error', { error: error instanceof Error ? error.message : 'Unknown' });
     return null;
   }
 }
@@ -310,321 +655,534 @@ function buildOptimizationPrompt(
   pageTitle: string,
   pageContent: string,
   keyword: string,
-  internalLinkCandidates: InternalLinkCandidate[],
-  neuronWriterData: NeuronWriterRecommendations | null,
+  internalLinks: InternalLinkCandidate[],
+  neuronWriter: NeuronWriterRecommendations | null,
   advanced: AdvancedSettings,
   siteContext: SiteContext | undefined
 ): string {
-  const neuronWriterSection = neuronWriterData?.status === 'ready' ? `
-═══════════════════════════════════════════════════════════════
-🧠 NEURONWRITER SEO INTELLIGENCE (USE THIS DATA!)
-═══════════════════════════════════════════════════════════════
-📊 TARGET METRICS:
-- Recommended Word Count: ${neuronWriterData.targetWordCount || 'N/A'}
-- Readability Target: ${neuronWriterData.readabilityTarget || 'N/A'}
+  const neuronSection = neuronWriter?.status === 'ready' ? `
+════════════════════════════════════════════════════════════════
+🧠 NEURONWRITER SEO INTELLIGENCE (USE THIS!)
+════════════════════════════════════════════════════════════════
+📊 Target Word Count: ${neuronWriter.targetWordCount || advanced.minWordCount}
+📊 Readability Target: ${neuronWriter.readabilityTarget || 50}
 
-📝 TITLE TERMS: ${neuronWriterData.titleTerms || 'N/A'}
-📌 H1 TERMS: ${neuronWriterData.h1Terms || 'N/A'}
-📎 H2 TERMS: ${neuronWriterData.h2Terms || 'N/A'}
-📄 CONTENT TERMS: ${neuronWriterData.contentTerms || 'N/A'}
-🔬 LSI KEYWORDS: ${neuronWriterData.extendedTerms || 'N/A'}
-🏢 ENTITIES: ${neuronWriterData.entities || 'N/A'}
+📝 TITLE TERMS: ${neuronWriter.titleTerms || 'N/A'}
+📌 H1 TERMS: ${neuronWriter.h1Terms || 'N/A'}
+📎 H2 TERMS: ${neuronWriter.h2Terms || 'N/A'}
+📄 CONTENT TERMS: ${neuronWriter.contentTerms || 'N/A'}
+🔬 LSI KEYWORDS: ${neuronWriter.extendedTerms || 'N/A'}
+🏢 ENTITIES: ${neuronWriter.entities || 'N/A'}
 
 ❓ QUESTIONS TO ANSWER:
-${neuronWriterData.questions?.suggested?.slice(0, 7).join('\n') || 'N/A'}
-${neuronWriterData.questions?.peopleAlsoAsk?.slice(0, 5).join('\n') || ''}
+${neuronWriter.questions?.peopleAlsoAsk?.slice(0, 7).map(q => `• ${q}`).join('\n') || ''}
+${neuronWriter.questions?.suggested?.slice(0, 5).map(q => `• ${q}`).join('\n') || ''}
+
+🏆 TOP COMPETITORS:
+${neuronWriter.competitors?.slice(0, 3).map(c => `#${c.rank}: ${c.title} (Score: ${c.score || 'N/A'})`).join('\n') || ''}
 ` : '';
 
-  const internalLinksSection = advanced.enableInternalLinks && internalLinkCandidates.length > 0 ? `
-═══════════════════════════════════════════════════════════════
-🔗 INTERNAL LINKS (ONLY USE THESE URLs!)
-═══════════════════════════════════════════════════════════════
-${internalLinkCandidates.slice(0, 50).map(l => `- "${l.title}" → ${l.url}`).join('\n')}
+  const linksSection = advanced.enableInternalLinks && internalLinks.length > 0 ? `
+════════════════════════════════════════════════════════════════
+🔗 INTERNAL LINKS (USE ONLY THESE URLs!)
+════════════════════════════════════════════════════════════════
+${internalLinks.slice(0, 50).map(l => `• "${l.title}" → ${l.url}`).join('\n')}
 
-⚠️ CRITICAL: ONLY link to URLs from this list. Do NOT invent URLs.
+⚠️ CRITICAL: Only use URLs from this list. DO NOT invent URLs.
+Include 10-15 internal links throughout the content.
 ` : '';
 
-  const siteContextSection = siteContext ? `
-═══════════════════════════════════════════════════════════════
+  const contextSection = siteContext ? `
+════════════════════════════════════════════════════════════════
 🏢 BRAND CONTEXT
-═══════════════════════════════════════════════════════════════
-- Organization: ${siteContext.organizationName || 'N/A'}
-- Industry: ${siteContext.industry || 'N/A'}
-- Target Audience: ${siteContext.targetAudience || 'N/A'}
-- Brand Voice: ${siteContext.brandVoice || 'Alex Hormozi style'}
+════════════════════════════════════════════════════════════════
+• Organization: ${siteContext.organizationName || 'N/A'}
+• Author: ${siteContext.authorName || 'Editorial Team'}
+• Industry: ${siteContext.industry || 'N/A'}
+• Target Audience: ${siteContext.targetAudience || 'N/A'}
+• Voice: ${siteContext.brandVoice || 'Alex Hormozi - direct, punchy, value-packed'}
 ` : '';
 
   return `
-╔═══════════════════════════════════════════════════════════════╗
-║  ⚠️ CRITICAL WORD COUNT REQUIREMENT ⚠️                        ║
-║  MINIMUM: ${advanced.minWordCount} words | MAXIMUM: ${advanced.maxWordCount} words       ║
-║  YOU MUST HIT AT LEAST ${advanced.minWordCount} WORDS OR THE OUTPUT IS INVALID   ║
-╚═══════════════════════════════════════════════════════════════╝
+╔════════════════════════════════════════════════════════════════╗
+║  ⚠️ CRITICAL WORD COUNT REQUIREMENT ⚠️                          ║
+║  MINIMUM: ${advanced.minWordCount} words | MAXIMUM: ${advanced.maxWordCount} words          ║
+║  YOU MUST HIT AT LEAST ${advanced.minWordCount} WORDS - NON-NEGOTIABLE          ║
+╚════════════════════════════════════════════════════════════════╝
 
-Transform this content into an EXCEPTIONAL, HIGH-VALUE blog post using Alex Hormozi's writing style.
+Transform this content into an EXCEPTIONAL blog post using Alex Hormozi's writing style.
 
-═══════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════════
 📄 ORIGINAL CONTENT TO TRANSFORM
-═══════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════════
 Title: ${pageTitle}
 Primary Keyword: ${keyword}
 
-CURRENT CONTENT:
-${pageContent.substring(0, 20000)}
+CONTENT:
+${pageContent.substring(0, 25000)}
 
-${neuronWriterSection}
-${internalLinksSection}
-${siteContextSection}
+${neuronSection}
+${linksSection}
+${contextSection}
 
-═══════════════════════════════════════════════════════════════
-📋 MANDATORY REQUIREMENTS (ALL MUST BE INCLUDED)
-═══════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════════
+📋 REQUIREMENTS CHECKLIST (ALL MANDATORY)
+════════════════════════════════════════════════════════════════
 
-🎯 WORD COUNT: ${advanced.minWordCount}-${advanced.maxWordCount} words (STRICTLY ENFORCED)
-   - You MUST write AT LEAST ${advanced.minWordCount} words
-   - Add more sections, examples, and depth if needed
-   - This is NON-NEGOTIABLE
+✅ WORD COUNT: ${advanced.minWordCount}-${advanced.maxWordCount} words (STRICTLY ENFORCED)
+✅ TL;DR Summary with 5 bullet points
+✅ Table of Contents linking to H2s
+✅ Expert quote with real attribution
+✅ YouTube video recommendation
+✅ Research/study reference
+✅ ${advanced.enableFaqs ? '5-7 FAQs in PAA format with schema' : 'No FAQs'}
+✅ ${advanced.enableKeyTakeaways ? '5-7 Key Takeaways' : 'No takeaways'}
+✅ ${advanced.enableInternalLinks ? '10-15 internal links from provided list' : 'No internal links'}
+✅ ${advanced.enableCtas ? '3 CTAs (after-intro, mid, conclusion)' : 'No CTAs'}
+✅ ${advanced.enableSchema ? 'Full Article + FAQ Schema' : 'No schema'}
+✅ Comparison table
+✅ Pro tip boxes (2-3)
+✅ Warning/mistake box
+✅ Stat callout boxes (2-3)
 
-📝 CONTENT BLOCKS TO INCLUDE:
-1. TL;DR Summary (4-5 punchy bullet points at TOP)
-2. Expert Quote (real industry quote with attribution)
-3. YouTube Video suggestion (search query + context)
-4. Research/Patent Reference (cite academic source)
-5. ${advanced.enableFaqs ? '5-7 FAQs in PAA format' : 'No FAQs'}
-6. ${advanced.enableKeyTakeaways ? '5-7 Key Takeaways at end' : 'No takeaways'}
-7. ${advanced.enableToc ? 'Table of Contents' : 'No TOC'}
-8. ${advanced.enableInternalLinks ? '10-15 internal links from provided list' : 'No internal links'}
-9. ${advanced.enableCtas ? '3 CTAs (after intro, mid-content, conclusion)' : 'No CTAs'}
-10. ${advanced.enableSchema ? 'Article + FAQ Schema markup' : 'No schema'}
+════════════════════════════════════════════════════════════════
+📤 OUTPUT FORMAT (JSON ONLY - NO CODE FENCES)
+════════════════════════════════════════════════════════════════
 
-✍️ WRITING REQUIREMENTS:
-- Write EXACTLY like Alex Hormozi
-- Every paragraph delivers value
-- Use specific numbers and data
-- Include real-world examples
-- Make it impossible to stop reading
-- Bold key phrases (1-2 per paragraph)
-- H2 headers every 200-300 words MAX
-
-═══════════════════════════════════════════════════════════════
-📤 OUTPUT FORMAT (RETURN ONLY THIS JSON STRUCTURE)
-═══════════════════════════════════════════════════════════════
 {
-  "optimizedTitle": "Power-word title under 60 chars with keyword",
-  "metaDescription": "Compelling 155-char meta with CTA",
-  "h1": "Main H1 (can differ from title)",
-  "h2s": ["H2 1", "H2 2", "H2 3", "H2 4", "H2 5", "..."],
+  "optimizedTitle": "Power-word title under 60 chars with primary keyword",
+  "metaDescription": "Compelling 155-char meta description with CTA",
+  "h1": "Main H1 heading (can differ slightly from title)",
+  "h2s": ["Question-format H2 1", "Question-format H2 2", "H2 3", "H2 4", "H2 5", "..."],
   
   "tldrSummary": [
-    "💡 Key insight 1 with specific number",
-    "🎯 Key insight 2 - contrarian take",
-    "⚡ Key insight 3 - actionable",
-    "🔥 Key insight 4 - mic-drop statement"
+    "💡 [Specific insight with number]",
+    "🎯 [Contrarian take]",
+    "⚡ [Actionable tip]",
+    "🔥 [Mic-drop statement]",
+    "📈 [Expected outcome]"
   ],
   
   "expertQuote": {
-    "quote": "Compelling expert quote relevant to topic",
+    "quote": "Real expert quote relevant to the topic",
     "author": "Expert Name",
     "role": "Title at Company",
     "avatarUrl": null
   },
   
   "youtubeEmbed": {
-    "searchQuery": "specific youtube search query",
-    "suggestedTitle": "Type of video to embed",
-    "context": "Why this video adds value"
+    "searchQuery": "specific youtube search query for relevant video",
+    "suggestedTitle": "Type of video to find",
+    "context": "Why this video adds value to the content"
   },
   
   "patentReference": {
     "type": "research",
-    "identifier": "DOI or Patent Number",
-    "title": "Research/Patent Title",
-    "summary": "2-sentence relevance summary",
-    "link": "https://..."
+    "identifier": "Study/Paper ID or Name",
+    "title": "Title of the research",
+    "summary": "Key finding in 2-3 sentences",
+    "link": "URL if available"
   },
   
-  "optimizedContent": "<article class='prose prose-lg max-w-none'>
-    <div class='tldr-box bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border-l-4 border-blue-500 p-6 rounded-r-xl my-8'>
-      <h3 class='text-lg font-bold text-blue-700 dark:text-blue-300 mb-3 flex items-center gap-2'>⚡ TL;DR - The Bottom Line</h3>
-      <ul class='space-y-2 text-gray-700 dark:text-gray-300'>
-        <li>💡 Point 1</li>
-        <li>🎯 Point 2</li>
-        <li>⚡ Point 3</li>
-        <li>🔥 Point 4</li>
-      </ul>
-    </div>
-    
-    <p class='text-xl leading-relaxed'><strong>Hook sentence that grabs attention.</strong> Second sentence that delivers on the hook.</p>
-    
-    <h2 class='text-2xl font-bold mt-10 mb-4'>First Major Section</h2>
-    <p>Content with <strong>bold key phrases</strong> and value...</p>
-    
-    <blockquote class='expert-quote bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 border-l-4 border-amber-500 p-6 rounded-r-xl my-8 italic'>
-      <p class='text-lg'>"Expert quote here"</p>
-      <footer class='mt-3 text-sm font-semibold'>— Expert Name, Title</footer>
-    </blockquote>
-    
-    <div class='key-takeaways bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-950/30 dark:to-green-950/30 border-l-4 border-emerald-500 p-6 rounded-r-xl my-8'>
-      <h3 class='text-lg font-bold text-emerald-700 dark:text-emerald-300 mb-3'>🎯 Key Takeaways</h3>
-      <ul class='space-y-2'>
-        <li>✅ Takeaway 1</li>
-        <li>✅ Takeaway 2</li>
-      </ul>
-    </div>
-    
-    <div class='faq-section my-8'>
-      <h2 class='text-2xl font-bold mb-6'>Frequently Asked Questions</h2>
-      <div class='space-y-4'>
-        <details class='bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4'>
-          <summary class='font-semibold cursor-pointer'>Question 1?</summary>
-          <p class='mt-3 text-gray-600 dark:text-gray-400'>Answer...</p>
-        </details>
-      </div>
-    </div>
-  </article>",
+  "optimizedContent": "<full HTML content with all blocks, styling classes, internal links>",
+  
+  "faqs": [
+    {"question": "PAA-style question 1?", "answer": "40-60 word direct answer"},
+    {"question": "PAA-style question 2?", "answer": "40-60 word direct answer"}
+  ],
+  
+  "keyTakeaways": [
+    "✅ Actionable takeaway 1",
+    "✅ Actionable takeaway 2",
+    "✅ Actionable takeaway 3",
+    "✅ Actionable takeaway 4",
+    "✅ Actionable takeaway 5"
+  ],
+  
+  "ctas": [
+    {"text": "CTA text for after intro", "position": "after-intro", "style": "primary"},
+    {"text": "CTA text for mid content", "position": "mid-content", "style": "secondary"},
+    {"text": "CTA text for conclusion", "position": "conclusion", "style": "primary"}
+  ],
+  
+  "tableOfContents": ["H2 Title 1", "H2 Title 2", "..."],
   
   "contentStrategy": {
-    "wordCount": ${advanced.minWordCount},
-    "readabilityScore": 72,
-    "keywordDensity": 1.5,
-    "lsiKeywords": ["term1", "term2"],
-    "hormoziStyleScore": 90,
-    "entitiesCovered": ["entity1", "entity2"]
+    "wordCount": [actual word count of optimizedContent],
+    "readabilityScore": [0-100],
+    "keywordDensity": [percentage],
+    "lsiKeywords": ["related", "keywords", "used"]
   },
   
   "internalLinks": [
-    {"anchor": "text", "target": "https://...", "context": "sentence"}
+    {"anchor": "anchor text used", "target": "/url-from-list", "position": 1}
   ],
   
-  "schema": { "@context": "https://schema.org", "@type": "Article", "..." },
-  
-  "faqs": [
-    {"question": "Q1?", "answer": "A1"},
-    {"question": "Q2?", "answer": "A2"}
-  ],
-  
-  "keyTakeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
-  
-  "ctas": [
-    {"text": "CTA text", "position": "after-intro", "style": "primary"}
-  ],
-  
-  "tableOfContents": ["Section 1", "Section 2"],
-  
-  "qualityScore": 92,
-  "seoScore": 90,
-  "readabilityScore": 75,
-  "engagementScore": 88
-}
-
-⚠️ REMEMBER: Your optimizedContent MUST contain AT LEAST ${advanced.minWordCount} words. Count them!`;
-}
-
-function convertMarkdownToHtml(content: string): string {
-  if (!content) return content;
-
-  let html = content;
-  html = html.replace(/^#### (.+)$/gm, '<h4 class="text-lg font-semibold mt-6 mb-3">$1</h4>');
-  html = html.replace(/^### (.+)$/gm, '<h3 class="text-xl font-bold mt-8 mb-4">$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2 class="text-2xl font-bold mt-10 mb-4">$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1 class="text-3xl font-bold mt-12 mb-6">$1</h1>');
-  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-blue-600 hover:underline">$1</a>');
-  html = html.replace(/^- (.+)$/gm, '<li class="ml-4">$1</li>');
-  html = html.replace(/(<li.*<\/li>\n?)+/g, '<ul class="list-disc space-y-2 my-4">$&</ul>');
-  html = html.replace(/^\d+\. (.+)$/gm, '<li class="ml-4">$1</li>');
-
-  return html;
-}
-
-function validateInternalLinks(content: string, validUrlSet: Set<string>, logger: Logger): string {
-  if (!content) return content;
-
-  const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>/gi;
-  let match;
-  let invalidCount = 0;
-  let result = content;
-
-  while ((match = linkRegex.exec(content)) !== null) {
-    const href = match[1];
-    if (href.startsWith('/') || href.startsWith('#') || href.startsWith('mailto:')) continue;
-
-    if (href.startsWith('http://') || href.startsWith('https://')) {
-      if (!validUrlSet.has(href)) {
-        const slug = href.split('/').pop()?.replace(/\/$/, '') || '';
-        if (!validUrlSet.has(slug)) {
-          result = result.replace(match[0], `<!-- removed invalid link: ${href} --><span`);
-          invalidCount++;
-        }
+  "schema": {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Article",
+        "headline": "[title]",
+        "description": "[meta]",
+        "author": {"@type": "Person", "name": "${siteContext?.authorName || 'Editorial Team'}"},
+        "publisher": {"@type": "Organization", "name": "${siteContext?.organizationName || 'Publisher'}"},
+        "datePublished": "${new Date().toISOString()}",
+        "dateModified": "${new Date().toISOString()}"
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": []
       }
-    }
-  }
-
-  if (invalidCount > 0) {
-    logger.warn('Removed invalid internal links', { count: invalidCount });
-  }
-
-  return result;
+    ]
+  },
+  
+  "aiSuggestions": {
+    "contentGaps": "What's missing compared to top competitors",
+    "quickWins": "Easy improvements for immediate impact",
+    "improvements": ["Suggestion 1", "Suggestion 2", "Suggestion 3"]
+  },
+  
+  "qualityScore": [0-100 overall quality],
+  "seoScore": [0-100 SEO optimization],
+  "readabilityScore": [0-100 readability],
+  "engagementScore": [0-100 engagement potential],
+  "estimatedRankPosition": [1-100 estimated SERP position],
+  "confidenceLevel": [0-100 confidence in optimization]
+}`;
 }
 
-const escapeNewlinesInJsonStrings = (s: string): string => {
-  let inString = false;
-  let out = '';
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (c === '"' && (i === 0 || s[i - 1] !== '\\')) inString = !inString;
-    if (inString && c === '\n') out += '\\n';
-    else if (inString && c === '\r') { /* skip */ }
-    else if (inString && c === '\t') out += '\\t';
-    else out += c;
-  }
-  return out;
-};
-
-const repairJsonStringForParsing = (raw: string): string => {
-  let s = raw.replace(/\r/g, '');
-  s = s.replace(/="([^"]*)"/g, "='$1'");
-  s = escapeNewlinesInJsonStrings(s);
-  s = s.replace(/,\s*([}\]])/g, '$1');
-  return s;
-};
-
-// ============================================================
-// BACKGROUND JOB PROCESSOR
-// ============================================================
-async function processOptimizationJob(
-  supabase: ReturnType<typeof createClient>,
-  supabaseUrl: string,
-  supabaseKey: string,
-  lovableApiKey: string | undefined,
-  jobId: string,
-  pageId: string,
-  request: OptimizeRequest,
+async function callAIProvider(
+  provider: AIProvider,
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
   logger: Logger
-) {
-  const { siteUrl, username, applicationPassword, targetKeyword, language, aiConfig, neuronWriter, advanced, siteContext } = request;
+): Promise<{ content: string; tokensUsed: number }> {
+  logger.info('Calling AI provider', { provider, model });
 
-  const effectiveAdvanced: AdvancedSettings = {
-    targetScore: advanced?.targetScore ?? 85,
-    minWordCount: advanced?.minWordCount ?? 2500,
-    maxWordCount: advanced?.maxWordCount ?? 3500,
-    enableFaqs: advanced?.enableFaqs ?? true,
-    enableSchema: advanced?.enableSchema ?? true,
-    enableInternalLinks: advanced?.enableInternalLinks ?? true,
-    enableToc: advanced?.enableToc ?? true,
-    enableKeyTakeaways: advanced?.enableKeyTakeaways ?? true,
-    enableCtas: advanced?.enableCtas ?? true,
-  };
+  const maxTokens = 16000;
+
+  switch (provider) {
+    case 'google': {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            { role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] }
+          ],
+          generationConfig: {
+            maxOutputTokens: maxTokens,
+            temperature: 0.7,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Google API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const tokensUsed = data.usageMetadata?.totalTokenCount || 0;
+      
+      return { content, tokensUsed };
+    }
+
+    case 'openai': {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          max_tokens: maxTokens,
+          temperature: 0.7,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      return {
+        content: data.choices?.[0]?.message?.content || '',
+        tokensUsed: data.usage?.total_tokens || 0,
+      };
+    }
+
+    case 'anthropic': {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Anthropic API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      return {
+        content: data.content?.[0]?.text || '',
+        tokensUsed: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+      };
+    }
+
+    case 'groq': {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          max_tokens: maxTokens,
+          temperature: 0.7,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Groq API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      return {
+        content: data.choices?.[0]?.message?.content || '',
+        tokensUsed: data.usage?.total_tokens || 0,
+      };
+    }
+
+    case 'openrouter': {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://wp-optimizer.pro',
+          'X-Title': 'WP Optimizer Pro',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          max_tokens: maxTokens,
+          temperature: 0.7,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`OpenRouter API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      return {
+        content: data.choices?.[0]?.message?.content || '',
+        tokensUsed: data.usage?.total_tokens || 0,
+      };
+    }
+
+    default:
+      throw new Error(`Unsupported AI provider: ${provider}`);
+  }
+}
+
+function parseAIResponse(content: string, logger: Logger): OptimizationResult {
+  // Clean the response
+  let cleaned = content.trim();
+  
+  // Remove markdown code fences if present
+  if (cleaned.startsWith('```json')) {
+    cleaned = cleaned.slice(7);
+  } else if (cleaned.startsWith('```')) {
+    cleaned = cleaned.slice(3);
+  }
+  if (cleaned.endsWith('```')) {
+    cleaned = cleaned.slice(0, -3);
+  }
+  cleaned = cleaned.trim();
+
+  // Find JSON object bounds
+  const jsonStart = cleaned.indexOf('{');
+  const jsonEnd = cleaned.lastIndexOf('}');
+  
+  if (jsonStart === -1 || jsonEnd === -1) {
+    throw new Error('No valid JSON found in AI response');
+  }
+
+  cleaned = cleaned.slice(jsonStart, jsonEnd + 1);
 
   try {
-    const useUserAI = aiConfig?.provider && aiConfig?.apiKey && aiConfig?.model;
-
-    if (!useUserAI && !lovableApiKey) {
-      throw new Error('No AI provider configured.');
+    const parsed = JSON.parse(cleaned);
+    
+    // Validate required fields
+    if (!parsed.optimizedTitle || !parsed.optimizedContent) {
+      throw new Error('Missing required fields in AI response');
     }
 
+    return parsed as OptimizationResult;
+  } catch (e) {
+    logger.error('JSON parse error', { error: e instanceof Error ? e.message : 'Unknown' });
+    throw new Error(`Failed to parse AI response: ${e instanceof Error ? e.message : 'Unknown'}`);
+  }
+}
+
+function validateOptimizationQuality(
+  result: OptimizationResult,
+  minWordCount: number,
+  logger: Logger
+): { valid: boolean; issues: string[]; score: number } {
+  const issues: string[] = [];
+  let score = 100;
+
+  // Word count check
+  const wordCount = result.contentStrategy?.wordCount || 
+    result.optimizedContent?.split(/\s+/).filter(Boolean).length || 0;
+  
+  if (wordCount < minWordCount * 0.85) {
+    issues.push(`Word count (${wordCount}) below minimum (${minWordCount})`);
+    score -= 30;
+  }
+
+  // Required sections check
+  if (!result.tldrSummary || result.tldrSummary.length < 3) {
+    issues.push('Missing or incomplete TL;DR summary');
+    score -= 10;
+  }
+
+  if (!result.faqs || result.faqs.length < 3) {
+    issues.push('Missing or insufficient FAQs');
+    score -= 10;
+  }
+
+  if (!result.keyTakeaways || result.keyTakeaways.length < 3) {
+    issues.push('Missing or insufficient key takeaways');
+    score -= 10;
+  }
+
+  // Check for content blocks
+  const content = result.optimizedContent || '';
+  const hasInsightBox = content.includes('wp-opt-insight') || content.includes('Key Insight');
+  const hasTipBox = content.includes('wp-opt-tip') || content.includes('Pro Tip');
+  const hasComparisonTable = content.includes('wp-opt-comparison') || content.includes('<table');
+
+  if (!hasInsightBox) {
+    issues.push('Missing insight boxes');
+    score -= 5;
+  }
+  if (!hasTipBox) {
+    issues.push('Missing pro tip boxes');
+    score -= 5;
+  }
+  if (!hasComparisonTable) {
+    issues.push('Missing comparison table');
+    score -= 5;
+  }
+
+  // H2 count check
+  const h2Count = (content.match(/<h2/gi) || []).length;
+  if (h2Count < 5) {
+    issues.push(`Insufficient H2 headers (${h2Count}, need 5+)`);
+    score -= 10;
+  }
+
+  logger.info('Quality validation', { wordCount, h2Count, score, issueCount: issues.length });
+
+  return {
+    valid: score >= 60,
+    issues,
+    score: Math.max(0, score),
+  };
+}
+
+function calculateQualityScore(result: OptimizationResult, minWordCount: number): number {
+  let score = 50; // Base score
+
+  const wordCount = result.contentStrategy?.wordCount || 0;
+  if (wordCount >= minWordCount) score += 15;
+  else if (wordCount >= minWordCount * 0.8) score += 10;
+
+  if (result.tldrSummary && result.tldrSummary.length >= 4) score += 5;
+  if (result.expertQuote?.quote) score += 5;
+  if (result.youtubeEmbed?.searchQuery) score += 3;
+  if (result.patentReference?.title) score += 5;
+  if (result.faqs && result.faqs.length >= 5) score += 7;
+  if (result.keyTakeaways && result.keyTakeaways.length >= 5) score += 5;
+  if (result.schema && Object.keys(result.schema).length > 0) score += 5;
+
+  return Math.min(100, Math.max(0, score));
+}
+
+// ============================================================
+// MAIN SERVE FUNCTION
+// ============================================================
+serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  const logger = new Logger('optimize-content');
+
+  try {
+    const request: OptimizeRequest = await req.json();
+    const { 
+      pageId, 
+      siteUrl, 
+      username, 
+      applicationPassword, 
+      aiConfig, 
+      neuronWriter, 
+      advanced, 
+      siteContext 
+    } = request;
+
+    logger.info('Optimization request received', { pageId, siteUrl });
+
+    // Validate required fields
+    if (!pageId || !siteUrl || !username || !applicationPassword) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Missing required fields' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Initialize Supabase
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Get page info
     const { data: pageData, error: pageError } = await supabase
       .from('pages')
       .select('*')
@@ -632,411 +1190,219 @@ async function processOptimizationJob(
       .single();
 
     if (pageError || !pageData) {
-      throw new Error('Page not found in database');
-    }
-
-    await updateJobProgress(supabase, jobId, 'fetching_sitemap_pages', 15, logger);
-
-    const { data: allPages } = await supabase
-      .from('pages')
-      .select('url, slug, title')
-      .neq('id', pageId)
-      .limit(200);
-
-    const internalLinkCandidates: InternalLinkCandidate[] = (allPages || []).map((p: { url: string; slug: string; title: string }) => ({
-      url: p.url,
-      slug: p.slug,
-      title: p.title,
-    }));
-
-    const validUrlSet = new Set<string>();
-    internalLinkCandidates.forEach(l => {
-      validUrlSet.add(l.url);
-      validUrlSet.add(l.slug);
-    });
-
-    logger.info('Fetched internal link candidates', { count: internalLinkCandidates.length });
-
-    await updateJobProgress(supabase, jobId, 'fetching_wordpress', 20, logger);
-
-    let normalizedUrl = siteUrl.trim();
-    if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
-      normalizedUrl = 'https://' + normalizedUrl;
-    }
-    normalizedUrl = normalizedUrl.replace(/\/+$/, '');
-
-    const authHeader = 'Basic ' + btoa(`${username}:${applicationPassword.replace(/\s+/g, '')}`);
-
-    let pageContent = '';
-    let pageTitle = pageData.title;
-
-    if (pageData.post_id) {
-      try {
-        const wpResponse = await withRetry(
-          () => fetch(
-            `${normalizedUrl}/wp-json/wp/v2/posts/${pageData.post_id}?context=edit`,
-            {
-              headers: {
-                'Accept': 'application/json',
-                'Authorization': authHeader,
-                'User-Agent': 'WP-Optimizer-Pro/2.0',
-              },
-            }
-          ),
-          { maxRetries: 2, initialDelayMs: 500, retryableStatuses: [408, 429, 500, 502, 503, 504] }
-        );
-
-        if (wpResponse.ok) {
-          const wpData = await wpResponse.json();
-          pageContent = wpData.content?.raw || wpData.content?.rendered || '';
-          pageTitle = wpData.title?.raw || wpData.title?.rendered || pageTitle;
-          logger.info('Fetched WP content', { chars: pageContent.length });
-        }
-      } catch (e) {
-        logger.warn('Could not fetch WP content', { error: e instanceof Error ? e.message : 'Unknown' });
-      }
-    }
-
-    const effectiveKeyword = targetKeyword || deriveKeyword(pageTitle, pageData.slug);
-    logger.info('Using keyword', { keyword: effectiveKeyword });
-
-    await updateJobProgress(supabase, jobId, 'fetching_neuronwriter', 30, logger);
-
-    let neuronWriterData: NeuronWriterRecommendations | null = null;
-    if (neuronWriter?.enabled && neuronWriter?.apiKey && neuronWriter?.projectId) {
-      neuronWriterData = await fetchNeuronWriterRecommendations(
-        supabaseUrl,
-        supabaseKey,
-        neuronWriter,
-        effectiveKeyword,
-        language || 'English',
-        logger,
-        jobId,
-        supabase
+      return new Response(
+        JSON.stringify({ success: false, error: 'Page not found' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    await updateJobProgress(supabase, jobId, 'analyzing_content', 40, logger);
-
-    const userPrompt = buildOptimizationPrompt(
-      pageTitle,
-      pageContent,
-      effectiveKeyword,
-      internalLinkCandidates,
-      neuronWriterData,
-      effectiveAdvanced,
-      siteContext
-    );
-
-    await updateJobProgress(supabase, jobId, 'generating_content', 50, logger);
-
-    const messages = [
-      { role: 'system', content: HORMOZI_STYLE_SYSTEM_PROMPT },
-      { role: 'user', content: userPrompt },
-    ];
-
-    interface AIRequest {
-      url: string;
-      headers: Record<string, string>;
-      body: string;
-    }
-
-    const buildAIRequest = (): AIRequest => {
-      if (useUserAI && aiConfig) {
-        const { provider, apiKey, model } = aiConfig;
-
-        switch (provider) {
-          case 'google':
-            return {
-              url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: `${HORMOZI_STYLE_SYSTEM_PROMPT}\n\n${userPrompt}` }] }],
-                generationConfig: { temperature: 0.7, maxOutputTokens: 100000 },
-              }),
-            };
-
-          case 'openai':
-            return {
-              url: 'https://api.openai.com/v1/chat/completions',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 16384 }),
-            };
-
-          case 'anthropic':
-            return {
-              url: 'https://api.anthropic.com/v1/messages',
-              headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-              body: JSON.stringify({ model, system: HORMOZI_STYLE_SYSTEM_PROMPT, messages: [{ role: 'user', content: userPrompt }], max_tokens: 16384 }),
-            };
-
-          case 'groq':
-            return {
-              url: 'https://api.groq.com/openai/v1/chat/completions',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 32000 }),
-            };
-
-          case 'openrouter':
-            return {
-              url: 'https://openrouter.ai/api/v1/chat/completions',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-                'HTTP-Referer': 'https://wp-optimizer-pro.lovable.app',
-                'X-Title': 'WP Optimizer Pro',
-              },
-              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 100000 }),
-            };
-
-          default:
-            throw new Error(`Unsupported AI provider: ${provider}`);
-        }
-      }
-
-      return {
-        url: 'https://ai.gateway.lovable.dev/v1/chat/completions',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${lovableApiKey}` },
-        body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages, temperature: 0.7, max_tokens: 100000 }),
-      };
-    };
-
-    const aiRequest = buildAIRequest();
-
-    const aiController = new AbortController();
-    const aiTimeoutId = setTimeout(() => aiController.abort(), 360000); // 6 minutes
-
-    let aiResponse: Response;
-    try {
-      aiResponse = await withRetry(
-        () => fetch(aiRequest.url, {
-          method: 'POST',
-          headers: aiRequest.headers,
-          body: aiRequest.body,
-          signal: aiController.signal,
-        }),
-        { maxRetries: 2, initialDelayMs: 3000, retryableStatuses: [429, 500, 502, 503, 504] }
-      );
-      clearTimeout(aiTimeoutId);
-    } catch (aiErr) {
-      clearTimeout(aiTimeoutId);
-      if (aiErr instanceof Error && aiErr.name === 'AbortError') {
-        throw new Error('AI request timed out after 360 seconds.');
-      }
-      throw aiErr;
-    }
-
-    await updateJobProgress(supabase, jobId, 'processing_response', 80, logger);
-
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      logger.error('AI error', { status: aiResponse.status, body: errorText.substring(0, 500) });
-
-      if (aiResponse.status === 429) throw new Error('Rate limited. Please wait and try again.');
-      if (aiResponse.status === 402) throw new Error('Insufficient credits.');
-
-      throw new Error(`AI request failed: ${aiResponse.status}`);
-    }
-
-    const aiData = await aiResponse.json();
-
-    let aiContent: string | undefined;
-    if (useUserAI && aiConfig?.provider === 'google') {
-      aiContent = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
-    } else if (useUserAI && aiConfig?.provider === 'anthropic') {
-      aiContent = aiData.content?.[0]?.text;
-    } else {
-      aiContent = aiData.choices?.[0]?.message?.content;
-    }
-
-    if (!aiContent) {
-      throw new Error('No response from AI');
-    }
-
-    logger.info('AI response received', { contentLength: aiContent.length });
-
-    let jsonStr = aiContent;
-    const jsonMatch = aiContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1];
-    } else {
-      const firstBrace = aiContent.indexOf('{');
-      const lastBrace = aiContent.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1) {
-        jsonStr = aiContent.substring(firstBrace, lastBrace + 1);
-      }
-    }
-
-    jsonStr = repairJsonStringForParsing(jsonStr);
-
-    let optimization: Record<string, unknown>;
-    try {
-      optimization = JSON.parse(jsonStr);
-    } catch (parseErr) {
-      logger.error('JSON parse error', { error: parseErr instanceof Error ? parseErr.message : 'Unknown', snippet: jsonStr.substring(0, 500) });
-      throw new Error('Failed to parse AI response as JSON');
-    }
-
-    const requiredFields = ['optimizedTitle', 'metaDescription', 'h1', 'h2s', 'optimizedContent', 'contentStrategy', 'qualityScore'];
-    for (const field of requiredFields) {
-      if (!(optimization as Record<string, unknown>)[field]) {
-        throw new Error(`AI response missing required field: ${field}`);
-      }
-    }
-
-    await updateJobProgress(supabase, jobId, 'validating_content', 90, logger);
-
-    optimization.optimizedContent = convertMarkdownToHtml(optimization.optimizedContent as string);
-    optimization.optimizedContent = validateInternalLinks(optimization.optimizedContent as string, validUrlSet, logger);
-
-    const contentLength = (optimization.optimizedContent as string)?.length || 0;
-    const wordCount = (optimization.optimizedContent as string)?.split(/\s+/).length || 0;
-
-    logger.info('Content validated', {
-      contentLength,
-      wordCount,
-      qualityScore: optimization.qualityScore,
-    });
-
-    // Warn if word count is too low
-    if (wordCount < effectiveAdvanced.minWordCount * 0.8) {
-      logger.warn('Word count below target', { expected: effectiveAdvanced.minWordCount, actual: wordCount });
-    }
-
-    await supabase.from('jobs').update({
-      status: 'completed',
-      current_step: 'optimization_complete',
-      progress: 100,
-      completed_at: new Date().toISOString(),
-      result: optimization,
-      ai_tokens_used: aiData.usage?.total_tokens || 0,
-    }).eq('id', jobId);
-
-    const scoreAfter = {
-      overall: optimization.qualityScore || 75,
-      seo: optimization.seoScore || 80,
-      readability: optimization.readabilityScore || 70,
-      engagement: optimization.engagementScore || 75,
-      title: optimization.optimizedTitle ? 90 : 50,
-      meta: optimization.metaDescription ? 90 : 50,
-      headings: (optimization.h2s as string[])?.length > 0 ? 85 : 50,
-      content: (optimization.contentStrategy as Record<string, unknown>)?.readabilityScore || 60,
-    };
-
-    await supabase.from('pages').update({
-      status: 'completed',
-      score_after: scoreAfter,
-      word_count: wordCount,
-      updated_at: new Date().toISOString(),
-    }).eq('id', pageId);
-
-    await supabase.from('activity_log').insert({
-      page_id: pageId,
-      job_id: jobId,
-      type: 'success',
-      message: `Optimized: ${wordCount} words, score ${optimization.qualityScore}`,
-      details: {
-        qualityScore: optimization.qualityScore,
-        seoScore: optimization.seoScore,
-        wordCount,
-        requestId: logger.getRequestId(),
-      },
-    });
-
-    logger.info('Optimization complete', { qualityScore: optimization.qualityScore, wordCount });
-
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    await markJobFailed(supabase, jobId, pageId, errorMessage, logger);
-  }
-}
-
-// ============================================================
-// MAIN SERVER
-// ============================================================
-serve(async (req) => {
-  const logger = new Logger('optimize-content');
-
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-  const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
-
-  const supabase = createClient(supabaseUrl, supabaseKey);
-
-  try {
-    const body: OptimizeRequest = await req.json();
-    const { pageId, siteUrl, username, applicationPassword } = body;
-
-    validateRequired(body as unknown as Record<string, unknown>, ['pageId', 'siteUrl', 'username', 'applicationPassword']);
-
-    logger.info('Received optimization request', { pageId, siteUrl });
-
-    const rateLimitKey = `optimize:${siteUrl}`;
-    const rateLimit = checkRateLimit(rateLimitKey, 10, 60000);
-    if (!rateLimit.allowed) {
-      throw new AppError(
-        `Rate limit exceeded. Try again in ${Math.ceil((rateLimit.retryAfterMs || 0) / 1000)} seconds.`,
-        'RATE_LIMIT_EXCEEDED',
-        429
-      );
-    }
-
-    const useUserAI = body.aiConfig?.provider && body.aiConfig?.apiKey && body.aiConfig?.model;
-    if (!useUserAI && !lovableApiKey) {
-      throw new AppError('No AI provider configured.', 'AI_NOT_CONFIGURED', 500);
-    }
-
-    await supabase.from('pages').update({ status: 'optimizing' }).eq('id', pageId);
-
-    const { data: job, error: jobError } = await supabase
+    // Create job record
+    const { data: jobData, error: jobError } = await supabase
       .from('jobs')
       .insert({
         page_id: pageId,
         status: 'running',
-        current_step: 'queued',
+        current_step: 'validating',
         progress: 5,
         started_at: new Date().toISOString(),
       })
       .select()
       .single();
 
-    if (jobError || !job) {
-      throw new AppError('Failed to create job', 'JOB_CREATE_FAILED', 500);
+    if (jobError || !jobData) {
+      logger.error('Failed to create job', { error: jobError?.message });
+      return new Response(
+        JSON.stringify({ success: false, error: 'Failed to create job' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    const jobId = job.id;
+    const jobId = jobData.id;
     logger.info('Job created', { jobId });
 
-    // @ts-ignore
-    EdgeRuntime.waitUntil(
-      processOptimizationJob(
-        supabase,
-        supabaseUrl,
-        supabaseKey,
-        lovableApiKey,
-        jobId,
-        pageId,
-        body,
-        logger
-      )
-    );
+    // Update page status
+    await supabase.from('pages').update({ status: 'optimizing' }).eq('id', pageId);
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: 'Optimization started',
-        jobId,
-        requestId: logger.getRequestId(),
-      }),
-      { status: 202, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // Default settings
+    const settings: AdvancedSettings = {
+      targetScore: advanced?.targetScore || 85,
+      minWordCount: advanced?.minWordCount || 2000,
+      maxWordCount: advanced?.maxWordCount || 3500,
+      enableFaqs: advanced?.enableFaqs ?? true,
+      enableSchema: advanced?.enableSchema ?? true,
+      enableInternalLinks: advanced?.enableInternalLinks ?? true,
+      enableToc: advanced?.enableToc ?? true,
+      enableKeyTakeaways: advanced?.enableKeyTakeaways ?? true,
+      enableCtas: advanced?.enableCtas ?? true,
+    };
+
+    try {
+      // Step 1: Fetch page content
+      await updateJobProgress(supabase, jobId, 'fetching_content', 10, logger);
+      
+      const { title, content, postId } = await fetchPageContent(
+        siteUrl,
+        pageData.url,
+        username,
+        applicationPassword,
+        logger
+      );
+
+      if (!content || content.length < 100) {
+        throw new Error('Page content is too short or empty');
+      }
+
+      // Step 2: Derive keyword
+      const keyword = request.targetKeyword || deriveKeyword(title, pageData.slug);
+      logger.info('Derived keyword', { keyword });
+
+      // Step 3: Fetch internal links
+      await updateJobProgress(supabase, jobId, 'fetching_sitemap_pages', 20, logger);
+      const internalLinks = await fetchInternalLinks(supabase, pageData.site_id, pageId, logger);
+      logger.info('Fetched internal links', { count: internalLinks.length });
+
+      // Step 4: Fetch NeuronWriter recommendations (if enabled)
+      let neuronWriterData: NeuronWriterRecommendations | null = null;
+      
+      if (neuronWriter?.enabled && neuronWriter?.apiKey && neuronWriter?.projectId) {
+        await updateJobProgress(supabase, jobId, 'fetching_neuronwriter', 25, logger);
+        neuronWriterData = await fetchNeuronWriterRecommendations(
+          supabaseUrl,
+          supabaseKey,
+          neuronWriter,
+          keyword,
+          request.language || 'English',
+          logger,
+          jobId,
+          supabase
+        );
+      }
+
+      // Step 5: Build prompt and call AI
+      await updateJobProgress(supabase, jobId, 'generating_content', 50, logger);
+
+      const userPrompt = buildOptimizationPrompt(
+        title,
+        content,
+        keyword,
+        internalLinks,
+        neuronWriterData,
+        settings,
+        siteContext
+      );
+
+      // Determine AI config
+      const provider = aiConfig?.provider || 'google';
+      const apiKey = aiConfig?.apiKey || Deno.env.get('GOOGLE_API_KEY') || '';
+      const model = aiConfig?.model || 'gemini-2.5-flash-preview-05-20';
+
+      if (!apiKey) {
+        throw new Error('No AI API key configured');
+      }
+
+      const { content: aiResponse, tokensUsed } = await callAIProvider(
+        provider,
+        apiKey,
+        model,
+        ULTRA_SEO_GEO_AEO_SYSTEM_PROMPT,
+        userPrompt,
+        logger
+      );
+
+      // Step 6: Parse response
+      await updateJobProgress(supabase, jobId, 'processing_response', 80, logger);
+      const optimization = parseAIResponse(aiResponse, logger);
+
+      // Step 7: Validate quality
+      await updateJobProgress(supabase, jobId, 'validating_content', 90, logger);
+      const validation = validateOptimizationQuality(optimization, settings.minWordCount, logger);
+
+      if (!validation.valid) {
+        logger.warn('Quality validation failed', { issues: validation.issues });
+        // Continue anyway but log the issues
+      }
+
+      // Calculate final quality score
+      const qualityScore = calculateQualityScore(optimization, settings.minWordCount);
+      optimization.qualityScore = qualityScore;
+
+      // Step 8: Save results
+      await updateJobProgress(supabase, jobId, 'saving_results', 95, logger);
+
+      // Update job with results
+      await supabase.from('jobs').update({
+        status: 'completed',
+        progress: 100,
+        current_step: 'completed',
+        result: optimization,
+        ai_tokens_used: tokensUsed,
+        completed_at: new Date().toISOString(),
+      }).eq('id', jobId);
+
+      // Update page status and score
+      await supabase.from('pages').update({
+        status: 'completed',
+        score_after: {
+          overall: qualityScore,
+          components: {
+            contentDepth: optimization.readabilityScore || 75,
+            seoOnPage: optimization.seoScore || 80,
+            engagement: optimization.engagementScore || 70,
+          },
+        },
+        word_count: optimization.contentStrategy?.wordCount || 0,
+        updated_at: new Date().toISOString(),
+      }).eq('id', pageId);
+
+      // Log success
+      await supabase.from('activity_log').insert({
+        page_id: pageId,
+        job_id: jobId,
+        type: 'success',
+        message: `Optimized: Score ${qualityScore}, ${optimization.contentStrategy?.wordCount || 0} words`,
+        details: {
+          qualityScore,
+          wordCount: optimization.contentStrategy?.wordCount,
+          tokensUsed,
+          validationIssues: validation.issues,
+        },
+      });
+
+      logger.info('Optimization completed successfully', { qualityScore, tokensUsed });
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: 'Optimization completed',
+          jobId,
+          optimization,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      await markJobFailed(supabase, jobId, pageId, errorMessage, logger);
+      
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: errorMessage,
+          jobId,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
   } catch (error) {
-    logger.error('Request failed', { error: error instanceof Error ? error.message : 'Unknown' });
-    return createErrorResponse(error as Error, logger.getRequestId());
+    logger.error('Request error', { error: error instanceof Error ? error.message : 'Unknown' });
+    
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 });
