@@ -3,13 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Check, AlertCircle, Zap, FileSearch, Brain, Shield, Upload, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { OptimizedContentRenderer } from '@/components/shared';
-
-// Then wherever you display the result:
-{job?.result && (
-  <OptimizedContentRenderer result={job.result} />
-)}
-
 
 export interface OptimizationStep {
   id: string;
@@ -24,13 +17,9 @@ interface OptimizationProgressProps {
   currentStep: number;
   steps: OptimizationStep[];
   pageTitle?: string;
-  // REAL progress from server (0-100)
   serverProgress: number;
-  // Current step name from server
   serverStepName?: string;
-  // Error message if failed
   errorMessage?: string;
-  // Called when user wants to cancel/dismiss
   onDismiss?: () => void;
 }
 
@@ -72,7 +61,6 @@ const DEFAULT_STEPS: OptimizationStep[] = [
   },
 ];
 
-// Map server step names to human-readable descriptions
 const STEP_DESCRIPTIONS: Record<string, string> = {
   'queued': 'Waiting in queue...',
   'validating': 'Validating WordPress connection...',
@@ -106,12 +94,10 @@ export function OptimizationProgress({
   const lastProgressRef = useRef<number>(0);
   const lastProgressTimeRef = useRef<number>(Date.now());
 
-  // Detect stalled progress (no update for 60+ seconds)
   const isStalled = serverProgress === lastProgressRef.current && 
     (Date.now() - lastProgressTimeRef.current) > 60000 &&
     serverProgress > 0 && serverProgress < 100;
 
-  // Track progress updates
   useEffect(() => {
     if (serverProgress !== lastProgressRef.current) {
       lastProgressRef.current = serverProgress;
@@ -119,7 +105,6 @@ export function OptimizationProgress({
     }
   }, [serverProgress]);
 
-  // Timer for elapsed time
   useEffect(() => {
     if (isActive) {
       startTimeRef.current = Date.now();
@@ -153,7 +138,6 @@ export function OptimizationProgress({
 
   if (!isActive) return null;
 
-  // Use REAL server progress, not fake time-based
   const progress = Math.min(Math.max(serverProgress, 0), 100);
   const activeStep = steps[currentStep] || steps[0];
   const stepDescription = serverStepName ? STEP_DESCRIPTIONS[serverStepName] || serverStepName : activeStep.description;
@@ -211,7 +195,7 @@ export function OptimizationProgress({
             </div>
           </div>
 
-          {/* Progress Bar - REAL progress from server */}
+          {/* Progress Bar */}
           <div className="px-4 pt-4">
             <div className="relative h-2 bg-muted rounded-full overflow-hidden">
               <motion.div
@@ -242,7 +226,7 @@ export function OptimizationProgress({
             </div>
           </div>
 
-          {/* Current Step - shows REAL step from server */}
+          {/* Current Step */}
           <div className="p-4">
             <div className={cn(
               "flex items-center gap-3 p-3 rounded-lg",
