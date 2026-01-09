@@ -650,7 +650,7 @@ export function PageQueue() {
     }
   };
 
-  const handlePublishSelected = async (publishStatus: 'draft' | 'publish') => {
+    const handlePublishSelected = async (publishStatus: 'draft' | 'publish') => {
     const completedPages = pages.filter(
       p => selectedPages.includes(p.id) && p.status === 'completed'
     );
@@ -661,4 +661,609 @@ export function PageQueue() {
       });
       return;
     }
+
+    setShowPublishDialog(true);
+    setIsPublishing(true);
+    setPublishProgress({ current: 0, total: completedPages.length, status: 'Starting...' });
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (let i = 0; i < completedPages.length; i++) {
+      const page = completedPages[i];
+      setPublishProgress({ 
+        current: i + 1, 
+        total: completedPages.length, 
+        status: `Publishing: ${page.slug || page.title}` 
+      });
+
+      try {
+        const { data: jobData, error: jobError } = await supabase
+          .from('jobs')
+          .select('result')
+          .eq('page_id', page.id)
+          .eq('status', 'completed')
+          .order('completed_at', { ascending: false })
+          .limit(1);
+
+        if (jobError || !jobData || jobData.length === 0) {
+          errorCount++;
+          continue;
+        }
+
+        const optimization = jobData[0]?.result as unknown as OptimizationResult | null;
+
+        if (!optimization) {
+          errorCount++;
+          continue;
+        }
+
+        const result = await publishToWordPress(page.id, optimization, publishStatus);
+        if (result.success) {
+          successCount++;
+        } else {
+          errorCount++;
+        }
+      } catch (err) {
+        errorCount++;
+      }
+
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    setIsPublishing(false);
+    setShowPublishDialog(false);
+    setSelectedPages([]);
+    await fetchPages();
+
+    if (successCount > 0 && errorCount === 0) {
+      toast.success(`Published ${successCount} pages as ${publishStatus}!`);
+    } else if (successCount > 0) {
+      toast.warning(`Published ${successCount} pages, ${errorCount} failed`);
+    } else {
+      toast.error('All publishes failed');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      const { error } = await supabase.from('pages').delete().eq('id', id);
+      if (error) throw error;
+      setPages(prev => prev.filter(p => p.id !== id));
+      setSelectedPages(prev => prev.filter(p => p !== id));
+      toast.success('Page removed');
+    } catch (error) {
+      console.error('Error deleting page:', error);
+      toast.error('Failed to delete page');
+    }
+  };
+
+  const getScore = (page: DBPage): number => {
+    const scoreAfter = page.score_after as { overall?: number } | null;
+    const scoreBefore = page.score_before as { overall?: number } | null;
+    return scoreAfter?.overall || scoreBefore?.overall || 0;
+  };
+
+  const filteredPages = pages.filter((page) => {
+    const matchesSearch = page.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         page.title.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || page.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  const totalPages = Math.ceil(filteredPages.length / ITEMS_PER_PAGE);
+  const paginatedPages = filteredPages.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  const visibleIds = paginatedPages.map(p => p.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedPages.includes(id));
+  
+  const selectedCompletedCount = pages.filter(
+    p => selectedPages.includes(p.id) && p.status === 'completed'
+  ).length;
+
+  return (
+    <>
+      <Card className="glass-panel border-border/50">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <List className="w-4 h-4 text-primary" />
+              Page Queue
+              <span className="text-muted-foreground font-normal text-sm">
+                ({pages.length} pages)
+              </span>
+            </CardTitle>
+            <div className="flex items-center gap-2 flex-wrap">
+              {selectedPages.length > 0 && (
+                <>
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1"
+                    onClick={handleOptimizeSelected}
+                    disabled={isOptimizing || isPublishing}
+                  >
+                    {isOptimizing ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Zap className="w-3.5 h-3.5" />
+                    )}
+                    {isOptimizing ? 'Optimizing...' : `Optimize ${selectedPages.length}`}
+                  </Button>
+                  {selectedCompletedCount > 0 && (
+                    <div className="flex gap-1">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="h-8 gap-1"
+                        onClick={() => handlePublishSelected('draft')}
+                        disabled={isOptimizing || isPublishing}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        Save as Draft ({selectedCompletedCount})
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="h-8 gap-1 bg-green-600 hover:bg-green-700"
+                        onClick={() => handlePublishSelected('publish')}
+                        disabled={isOptimizing || isPublishing}
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        Publish ({selectedCompletedCount})
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                onClick={fetchPages}
+                disabled={isLoading}
+              >
+                <RefreshCw className={cn("w-4 h-4", isLoading && "animate-spin")} />
+              </Button>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="pl-9 w-48 h-8 bg-muted/50"
+                />
+              </div>
+              <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCurrentPage(1); }}>
+                <SelectTrigger className="w-32 h-8 bg-muted/50">
+                  <Filter className="w-3 h-3 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="optimizing">Optimizing</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="published">Published</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : pages.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <List className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p>No pages in queue</p>
+              <p className="text-sm">Crawl a sitemap to add pages</p>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-lg border border-border/50 overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent border-border/50">
+                      <TableHead className="w-12">
+                        <Checkbox
+                          checked={allVisibleSelected}
+                          onCheckedChange={selectAllVisible}
+                        />
+                      </TableHead>
+                      <TableHead>URL</TableHead>
+                      <TableHead className="w-20 text-center">Score</TableHead>
+                      <TableHead className="w-28">Status</TableHead>
+                      <TableHead className="w-32 text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <AnimatePresence mode="popLayout">
+                      {paginatedPages.map((page) => (
+                        <motion.tr
+                          key={page.id}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, x: -10 }}
+                          className="border-border/50 hover:bg-muted/30 transition-colors"
+                        >
+                          <TableCell>
+                            <Checkbox
+                              checked={selectedPages.includes(page.id)}
+                              onCheckedChange={() => togglePageSelection(page.id)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-col">
+                              <span className="font-medium truncate max-w-[300px]">{page.slug || page.url}</span>
+                              <span className="text-xs text-muted-foreground truncate max-w-[300px]">
+                                {page.title}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <ScoreIndicator score={getScore(page)} size="sm" />
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status={page.status as any || 'pending'} />
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-end gap-1">
+                              {(page.status === 'pending' || !page.status) && (
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  className="h-7 w-7" 
+                                  title="Quick Optimize"
+                                  onClick={() => handleOptimizeSingle(page.id)}
+                                  disabled={isOptimizing}
+                                >
+                                  <Zap className="w-3.5 h-3.5" />
+                                </Button>
+                              )}
+                              {page.status === 'optimizing' && (
+                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                              )}
+                              {page.status === 'failed' && (
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  className="h-7 w-7" 
+                                  title="Retry"
+                                  onClick={() => handleOptimizeSingle(page.id)}
+                                  disabled={isOptimizing}
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                </Button>
+                              )}
+                              {(page.status === 'completed' || page.status === 'published') && (
+                                <>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-7 w-7" 
+                                    title="View Results"
+                                    onClick={() => handleViewResult(page)}
+                                  >
+                                    <FileText className="w-3.5 h-3.5" />
+                                  </Button>
+                                  {page.status === 'completed' && (
+                                    <Button 
+                                      variant="ghost" 
+                                      size="icon" 
+                                      className="h-7 w-7 text-green-500 hover:text-green-600" 
+                                      title="Quick Publish"
+                                      onClick={async () => {
+                                        const { data: jobData } = await supabase
+                                          .from('jobs')
+                                          .select('result')
+                                          .eq('page_id', page.id)
+                                          .eq('status', 'completed')
+                                          .order('completed_at', { ascending: false })
+                                          .limit(1)
+                                          .single();
+                                        
+                                        if (jobData?.result) {
+                                          setSelectedPageResult({ page, result: jobData.result as unknown as OptimizationResult });
+                                          handleValidateAndPublish();
+                                        }
+                                      }}
+                                    >
+                                      <Send className="w-3.5 h-3.5" />
+                                    </Button>
+                                  )}
+                                </>
+                              )}
+                              {page.status === 'published' && (
+                                <CheckCheck className="w-4 h-4 text-green-500" />
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                title="Preview"
+                                onClick={() => window.open(page.url, '_blank')}
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-destructive hover:text-destructive"
+                                onClick={() => handleDelete(page.id)}
+                                title="Delete"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </motion.tr>
+                      ))}
+                    </AnimatePresence>
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="flex items-center justify-between mt-4">
+                <span className="text-sm text-muted-foreground">
+                  Showing {paginatedPages.length} of {filteredPages.length}
+                  {selectedPages.length > 0 && ` • ${selectedPages.length} selected`}
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(currentPage - 1)}
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </Button>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                      let pageNum: number;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      return (
+                        <Button
+                          key={pageNum}
+                          variant={currentPage === pageNum ? 'default' : 'ghost'}
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => setCurrentPage(pageNum)}
+                        >
+                          {pageNum}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8"
+                    disabled={currentPage === totalPages || totalPages === 0}
+                    onClick={() => setCurrentPage(currentPage + 1)}
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Result Dialog */}
+      <Dialog open={showResultDialog} onOpenChange={setShowResultDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-primary" />
+              Optimization Results
+            </DialogTitle>
+            <DialogDescription>
+              {selectedPageResult?.page.title}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <ScrollArea className="max-h-[50vh] pr-4">
+            {selectedPageResult?.result ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 rounded-lg bg-muted/50">
+                    <p className="text-xs text-muted-foreground mb-1">Quality Score</p>
+                    <p className="text-2xl font-bold text-primary">{selectedPageResult.result.qualityScore}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-muted/50">
+                    <p className="text-xs text-muted-foreground mb-1">Word Count</p>
+                    <p className="text-2xl font-bold">{selectedPageResult.result.contentStrategy?.wordCount || 'N/A'}</p>
+                  </div>
+                </div>
+                <Separator />
+                <div>
+                  <p className="text-sm font-medium mb-2">Optimized Title</p>
+                  <p className="text-sm p-2 rounded bg-muted/50">{selectedPageResult.result.optimizedTitle}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium mb-2">Meta Description</p>
+                  <p className="text-sm p-2 rounded bg-muted/50">{selectedPageResult.result.metaDescription}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium mb-2">H2 Headings</p>
+                  <ul className="space-y-1">
+                    {selectedPageResult.result.h2s.map((h2, i) => (
+                      <li key={i} className="text-sm p-2 rounded bg-muted/50">• {h2}</li>
+                    ))}
+                  </ul>
+                </div>
+                {selectedPageResult.result.tldrSummary && (
+                  <div>
+                    <p className="text-sm font-medium mb-2">TL;DR Summary</p>
+                    <ul className="space-y-1">
+                      {selectedPageResult.result.tldrSummary.map((point, i) => (
+                        <li key={i} className="text-sm p-2 rounded bg-blue-500/10">{point}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div>
+                  <p className="text-sm font-medium mb-2">LSI Keywords</p>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedPageResult.result.contentStrategy.lsiKeywords.map((kw, i) => (
+                      <Badge key={i} variant="secondary">{kw}</Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-center py-8">No optimization data</p>
+            )}
+          </ScrollArea>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowResultDialog(false)}>Close</Button>
+            {selectedPageResult?.result && selectedPageResult.page.status !== 'published' && (
+              <Button onClick={handleValidateAndPublish} disabled={isPublishing}>
+                {isPublishing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
+                Validate & Publish
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Validation Dialog */}
+      <Dialog open={showValidationDialog} onOpenChange={setShowValidationDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {validationResult?.canPublish ? (
+                <CheckCircle2 className="w-5 h-5 text-green-500" />
+              ) : (
+                <AlertTriangle className="w-5 h-5 text-yellow-500" />
+              )}
+              Content Validation
+            </DialogTitle>
+          </DialogHeader>
+          {validationResult && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                <span className="text-sm font-medium">Overall Score</span>
+                <span className="text-lg font-bold">{validationResult.overallScore}%</span>
+              </div>
+              <div className="flex gap-2">
+                <Badge variant="destructive">{validationResult.summary.errors} Errors</Badge>
+                <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600">{validationResult.summary.warnings} Warnings</Badge>
+                <Badge variant="secondary" className="bg-green-500/10 text-green-600">{validationResult.summary.passed} Passed</Badge>
+              </div>
+              <ScrollArea className="max-h-[300px]">
+                <div className="space-y-2">
+                  {validationResult.checks.map((check, i) => (
+                    <div key={i} className={cn("p-2 rounded-lg text-sm flex items-center justify-between", check.passed ? "bg-green-500/10" : check.severity === 'error' ? "bg-red-500/10" : "bg-yellow-500/10")}>
+                      <div className="flex items-center gap-2">
+                        {check.passed ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : check.severity === 'error' ? <XCircle className="w-4 h-4 text-red-500" /> : <AlertTriangle className="w-4 h-4 text-yellow-500" />}
+                        <span>{check.name}</span>
+                      </div>
+                      <span className="text-muted-foreground">{check.actual} ({check.expected})</span>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowValidationDialog(false)}>Cancel</Button>
+            <Button variant="secondary" onClick={() => handlePublishSingle('draft')} disabled={isPublishing}>
+              {isPublishing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
+              Save as Draft
+            </Button>
+            <Button onClick={() => handlePublishSingle('publish')} disabled={isPublishing || !validationResult?.canPublish} className="bg-green-600 hover:bg-green-700">
+              {isPublishing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
+              Publish
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Publish Progress Dialog */}
+      <Dialog open={showPublishDialog} onOpenChange={() => {}}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="w-5 h-5 text-primary animate-pulse" />
+              Publishing to WordPress
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Progress value={(publishProgress.current / publishProgress.total) * 100} />
+            <p className="text-sm text-center text-muted-foreground">{publishProgress.current} of {publishProgress.total} pages</p>
+            <p className="text-sm text-center truncate">{publishProgress.status}</p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Batch Progress Dialog */}
+      <Dialog open={showBatchDialog} onOpenChange={() => {}}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {batchProgress.status === 'complete' ? <CheckCircle2 className="w-5 h-5 text-green-500" /> : batchProgress.status === 'error' ? <XCircle className="w-5 h-5 text-red-500" /> : <Zap className="w-5 h-5 text-primary animate-pulse" />}
+              Batch Optimization
+            </DialogTitle>
+            <DialogDescription>Processing {batchProgress.total} pages</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Progress value={(batchProgress.completed / batchProgress.total) * 100} />
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Progress</span>
+              <span className="font-medium">{batchProgress.completed} / {batchProgress.total}</span>
+            </div>
+            {batchProgress.failed > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-red-500">Failed</span>
+                <span className="font-medium text-red-500">{batchProgress.failed}</span>
+              </div>
+            )}
+            <div className="p-3 rounded-lg bg-muted/50">
+              <p className="text-xs text-muted-foreground mb-1">Currently processing</p>
+              <p className="text-sm font-medium truncate">{batchProgress.current}</p>
+            </div>
+            {batchProgress.status === 'complete' && (
+              <Button className="w-full" onClick={() => { setShowBatchDialog(false); setBatchProgress({ total: 0, completed: 0, failed: 0, current: '', status: 'idle' }); }}>Done</Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Single Optimization Progress */}
+      {batchProgress.status === 'idle' && (
+        <OptimizationProgress
+          isActive={isOptimizing}
+          currentStep={currentStepIndex}
+          steps={optimizationSteps}
+          pageTitle={optimizingPageTitle}
+          serverProgress={activeJob?.progress ?? 0}
+          serverStepName={activeJob?.currentStep}
+          errorMessage={activeJob?.errorMessage}
+          onDismiss={() => { setIsOptimizing(false); setOptimizingPageTitle(''); stopWatching(); }}
+        />
+      )}
+    </>
+  );
+}
 
