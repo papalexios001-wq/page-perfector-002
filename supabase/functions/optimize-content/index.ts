@@ -1,29 +1,24 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// WP OPTIMIZER PRO ULTRA - ENTERPRISE CONTENT OPTIMIZATION ENGINE v4.0
-// CRITICAL FIX: Forces AI to output styled HTML blocks, not plain text
+// WP OPTIMIZER PRO ULTRA - ENTERPRISE CONTENT OPTIMIZATION ENGINE v5.0
+// 🔥 CRITICAL FIX: Forces AI to output BEAUTIFUL STYLED HTML components
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CORS HEADERS
-// ═══════════════════════════════════════════════════════════════════════════════
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LOGGER CLASS
+// LOGGER
 // ═══════════════════════════════════════════════════════════════════════════════
 class Logger {
-  private functionName: string;
   private requestId: string;
   private startTime: number;
 
-  constructor(functionName: string, requestId?: string) {
-    this.functionName = functionName;
+  constructor(requestId?: string) {
     this.requestId = requestId || crypto.randomUUID();
     this.startTime = Date.now();
   }
@@ -32,7 +27,6 @@ class Logger {
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       level,
-      function: this.functionName,
       requestId: this.requestId,
       message,
       data,
@@ -43,19 +37,12 @@ class Logger {
   info(message: string, data?: Record<string, unknown>) { this.log('info', message, data); }
   warn(message: string, data?: Record<string, unknown>) { this.log('warn', message, data); }
   error(message: string, data?: Record<string, unknown>) { this.log('error', message, data); }
-  getRequestId() { return this.requestId; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TYPE DEFINITIONS
+// TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
 type AIProvider = 'google' | 'openai' | 'anthropic' | 'groq' | 'openrouter';
-
-interface AIConfig {
-  provider: AIProvider;
-  apiKey: string;
-  model: string;
-}
 
 interface AdvancedSettings {
   targetScore: number;
@@ -74,41 +61,19 @@ interface SiteContext {
   authorName?: string;
   industry?: string;
   targetAudience?: string;
-  brandVoice?: string;
-}
-
-interface NeuronWriterConfig {
-  enabled: boolean;
-  apiKey: string;
-  projectId: string;
 }
 
 interface NeuronWriterRecommendations {
-  success: boolean;
   status: string;
-  queryId?: string;
   targetWordCount?: number;
   titleTerms?: string;
-  h1Terms?: string;
   h2Terms?: string;
   contentTerms?: string;
-  extendedTerms?: string;
-  entities?: string;
-  questions?: {
-    suggested: string[];
-    peopleAlsoAsk: string[];
-  };
-  competitors?: Array<{
-    rank: number;
-    url: string;
-    title: string;
-    score?: number;
-  }>;
+  questions?: { peopleAlsoAsk: string[] };
 }
 
-interface InternalLinkCandidate {
+interface InternalLink {
   url: string;
-  slug: string;
   title: string;
 }
 
@@ -119,315 +84,253 @@ interface OptimizeRequest {
   applicationPassword: string;
   targetKeyword?: string;
   language?: string;
-  aiConfig?: AIConfig;
-  neuronWriter?: NeuronWriterConfig;
+  aiConfig?: { provider: AIProvider; apiKey: string; model: string };
+  neuronWriter?: { enabled: boolean; apiKey: string; projectId: string };
   advanced?: AdvancedSettings;
   siteContext?: SiteContext;
 }
 
-interface OptimizationResult {
-  optimizedTitle: string;
-  metaDescription: string;
-  h1: string;
-  h2s: string[];
-  tldrSummary?: string[];
-  expertQuote?: { quote: string; author: string; role: string };
-  youtubeEmbed?: { searchQuery: string; suggestedTitle: string; context: string };
-  patentReference?: { type: string; identifier: string; title: string; summary: string };
-  optimizedContent: string;
-  faqs?: Array<{ question: string; answer: string }>;
-  keyTakeaways?: string[];
-  ctas?: Array<{ text: string; position: string; style: string }>;
-  tableOfContents?: string[];
-  contentStrategy: { wordCount: number; readabilityScore: number; keywordDensity: number; lsiKeywords: string[] };
-  internalLinks: Array<{ anchor: string; target: string; position: number }>;
-  schema: Record<string, unknown>;
-  aiSuggestions: { contentGaps: string; quickWins: string; improvements: string[] };
-  qualityScore: number;
-  seoScore: number;
-  readabilityScore: number;
-  engagementScore: number;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// 🔥🔥🔥 THE CRITICAL FIX: SYSTEM PROMPT THAT FORCES HTML OUTPUT 🔥🔥🔥
-// This is the key change - explicit HTML templates with inline styles
+// 🔥🔥🔥 THE MAGIC: SYSTEM PROMPT THAT FORCES BEAUTIFUL HTML OUTPUT 🔥🔥🔥
 // ═══════════════════════════════════════════════════════════════════════════════
-function buildSystemPrompt(advanced: AdvancedSettings): string {
-  return `You are an expert content optimizer. Your #1 job is to transform content into BEAUTIFULLY FORMATTED HTML with styled components.
+function buildSystemPrompt(settings: AdvancedSettings): string {
+  return `You are an expert content optimizer. Your job is to transform content into BEAUTIFULLY FORMATTED HTML blog posts with styled visual components.
 
-## ⚠️⚠️⚠️ CRITICAL RULE #1: OUTPUT HTML, NOT PLAIN TEXT ⚠️⚠️⚠️
+## ⚠️⚠️⚠️ CRITICAL RULE #1: YOU MUST OUTPUT HTML WITH STYLED DIV BLOCKS ⚠️⚠️⚠️
 
-The "optimizedContent" field MUST contain FULLY FORMATTED HTML with styled <div> blocks.
-DO NOT output plain paragraphs. You MUST use the exact HTML structures shown below.
-If you output plain text without these styled boxes, you have FAILED the task.
+The "optimizedContent" field MUST contain HTML with styled <div> blocks using specific CSS classes.
 
-## ⚠️ CRITICAL RULE #2: WORD COUNT ${advanced.minWordCount}-${advanced.maxWordCount} WORDS
+DO NOT output plain paragraphs. You MUST use the styled HTML components shown below.
+If you output plain text without these styled boxes, YOU HAVE FAILED THE TASK.
 
-Count every word. This is strictly enforced.
+## ⚠️ CRITICAL RULE #2: WORD COUNT ${settings.minWordCount}-${settings.maxWordCount} WORDS
 
 ## ✍️ WRITING STYLE: ALEX HORMOZI
-
-- Short punchy sentences (1-2 sentences per paragraph)
-- Use specific numbers: "3x faster" not "much faster"  
+- Short punchy sentences (1-2 sentences per paragraph max)
+- Specific numbers: "3x faster" not "much faster"
 - Pattern interrupts every 200 words
-- Bold contrarian claims
 - End each H2 with a mic-drop statement
 
-## 📦 MANDATORY HTML BLOCKS - COPY THESE EXACTLY INTO optimizedContent:
+## 📦 MANDATORY HTML COMPONENTS - USE THESE EXACT STRUCTURES:
 
-### 1. TL;DR BOX (Put RIGHT AFTER your opening paragraph):
-
-<div class="wp-opt-tldr" style="margin:2.5rem 0;padding:2rem;background:linear-gradient(135deg,#EAF6FF 0%,#f0f8ff 50%,#fff 100%);border:1px solid #93c5fd;border-left:5px solid #0000FF;border-radius:0 12px 12px 0;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);">
-  <strong style="display:block;font-size:1.25rem;font-weight:700;color:#0000CC;margin-bottom:1rem;">⚡ TL;DR — The Bottom Line</strong>
-  <ul style="margin:0;padding:0;list-style:none;">
-    <li style="padding:0.75rem 0;border-bottom:1px solid rgba(0,0,255,0.1);font-size:1rem;line-height:1.6;">💡 [First key insight with specific number]</li>
-    <li style="padding:0.75rem 0;border-bottom:1px solid rgba(0,0,255,0.1);font-size:1rem;line-height:1.6;">🎯 [Second insight - contrarian or surprising]</li>
-    <li style="padding:0.75rem 0;border-bottom:1px solid rgba(0,0,255,0.1);font-size:1rem;line-height:1.6;">⚡ [Third insight - actionable tip]</li>
-    <li style="padding:0.75rem 0;border-bottom:1px solid rgba(0,0,255,0.1);font-size:1rem;line-height:1.6;">🔥 [Fourth insight - bold statement]</li>
-    <li style="padding:0.75rem 0;font-size:1rem;line-height:1.6;">📈 [Fifth insight - expected outcome]</li>
-  </ul>
+### 1. TL;DR BOX (Immediately after opening paragraph)
+<div class="wp-opt-tldr">
+<strong>⚡ TL;DR — The Bottom Line</strong>
+<ul>
+<li>💡 [First key insight with specific number or stat]</li>
+<li>🎯 [Second point - contrarian or surprising take]</li>
+<li>⚡ [Third point - actionable tip they can use today]</li>
+<li>🔥 [Fourth point - bold statement that challenges assumptions]</li>
+<li>📈 [Fifth point - expected outcome or result]</li>
+</ul>
 </div>
 
-### 2. PRO TIP BOX (Use 2-3 throughout article):
-
-<div class="wp-opt-tip" style="margin:2rem 0;padding:1.5rem 1.5rem 1.5rem 4rem;background:linear-gradient(135deg,#d4edda 0%,#d1fae5 30%,#fff 100%);border:1px solid #86efac;border-left:5px solid #28a745;border-radius:0 12px 12px 0;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);position:relative;">
-  <span style="position:absolute;top:1.25rem;left:1rem;font-size:1.75rem;">💰</span>
-  <strong style="display:block;font-size:0.85rem;font-weight:700;color:#047857;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.5rem;">Pro Tip</strong>
-  <p style="margin:0;font-size:1rem;line-height:1.7;color:#333;">[Your insider knowledge or actionable advice here]</p>
+### 2. PRO TIP BOX (Use 2-3 throughout article)
+<div class="wp-opt-tip">
+<strong>💰 Pro Tip</strong>
+<p>[Insider knowledge, shortcut, or actionable advice that saves time/money]</p>
 </div>
 
-### 3. WARNING BOX (Use 1-2 in article):
-
-<div class="wp-opt-warning" style="margin:2rem 0;padding:1.5rem 1.5rem 1.5rem 4rem;background:linear-gradient(135deg,#fffbeb 0%,#fef3c7 30%,#fff 100%);border:1px solid #fcd34d;border-left:5px solid #f59e0b;border-radius:0 12px 12px 0;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);position:relative;">
-  <span style="position:absolute;top:1.25rem;left:1rem;font-size:1.75rem;">⚠️</span>
-  <strong style="display:block;font-size:0.85rem;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.5rem;">Common Mistake</strong>
-  <p style="margin:0;font-size:1rem;line-height:1.7;color:#333;">[What readers should avoid and why]</p>
+### 3. WARNING BOX (Use 1-2 in article)
+<div class="wp-opt-warning">
+<strong>⚠️ Common Mistake</strong>
+<p>[What readers should avoid doing and why it hurts them]</p>
 </div>
 
-### 4. KEY INSIGHT BOX (Use 2-3 throughout):
-
-<div class="wp-opt-insight" style="margin:2rem 0;padding:1.5rem 1.5rem 1.5rem 4rem;background:linear-gradient(135deg,#EAF6FF 0%,#dbeafe 30%,#fff 100%);border:1px solid #93c5fd;border-left:5px solid #0000FF;border-radius:0 12px 12px 0;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);position:relative;">
-  <span style="position:absolute;top:1.25rem;left:1rem;font-size:1.75rem;">💡</span>
-  <strong style="display:block;font-size:0.85rem;font-weight:700;color:#0000CC;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.5rem;">Key Insight</strong>
-  <p style="margin:0;font-size:1rem;line-height:1.7;color:#333;">[Non-obvious observation backed by data]</p>
+### 4. KEY INSIGHT BOX (Use 2-3 throughout)
+<div class="wp-opt-insight">
+<strong>💡 Key Insight</strong>
+<p>[Non-obvious observation backed by data or real experience]</p>
 </div>
 
-### 5. STAT BOX (Use 2-3 for impressive numbers):
-
-<div class="wp-opt-stat" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;margin:2.5rem auto;padding:2rem;max-width:280px;background:linear-gradient(145deg,#EAF6FF,#dbeafe);border:2px solid #93c5fd;border-radius:12px;box-shadow:0 10px 40px -10px rgba(0,0,255,0.25);">
-  <strong style="display:block;font-size:3rem;font-weight:800;color:#0000FF;line-height:1;">[NUMBER]%</strong>
-  <p style="margin:0.5rem 0 0;font-size:0.9rem;color:#666;">[What this number means]</p>
+### 5. STAT BOX (Use for impressive numbers)
+<div class="wp-opt-stat">
+<strong>[NUMBER]%</strong>
+<p>[What this number means for the reader]</p>
 </div>
 
-### 6. EXPERT QUOTE BOX:
-
-<div class="wp-opt-quote" style="margin:2.5rem 0;padding:2rem 2rem 2rem 4rem;background:linear-gradient(135deg,#fffbeb 0%,#fef3c7 30%,#fff 100%);border:1px solid #fcd34d;border-left:5px solid #f59e0b;border-radius:0 12px 12px 0;font-style:italic;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);position:relative;">
-  <span style="position:absolute;top:0.5rem;left:1rem;font-size:4rem;font-family:Georgia,serif;color:rgba(245,158,11,0.3);line-height:1;font-style:normal;">"</span>
-  <p style="font-size:1.15rem;line-height:1.8;margin-bottom:1rem;color:#333;position:relative;z-index:1;">[Real quote from industry expert]</p>
-  <cite style="display:block;font-style:normal;font-weight:600;color:#b45309;font-size:1rem;">— [Expert Name], [Title] at [Company]</cite>
+### 6. EXPERT QUOTE BOX
+<div class="wp-opt-quote">
+<p>"[Impactful quote from a real industry expert - can be paraphrased]"</p>
+<cite>— [Expert Name], [Their Title/Company]</cite>
 </div>
 
-### 7. KEY TAKEAWAYS BOX (Put BEFORE your conclusion):
-
-<div class="wp-opt-takeaways" style="position:relative;margin:2.5rem 0;padding:2rem;background:linear-gradient(135deg,#d4edda 0%,#f0fdf4 50%,#fff 100%);border:2px solid #86efac;border-radius:12px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);overflow:hidden;">
-  <div style="position:absolute;top:0;left:0;right:0;height:5px;background:linear-gradient(90deg,#28a745,#34d399,#6ee7b7);"></div>
-  <strong style="display:block;font-size:1.25rem;font-weight:700;color:#047857;margin-bottom:1.25rem;">🎯 Key Takeaways</strong>
-  <ul style="margin:0;padding:0;list-style:none;display:grid;gap:0.75rem;">
-    <li style="display:flex;align-items:flex-start;gap:0.75rem;padding:1rem;background:rgba(40,167,69,0.08);border-radius:10px;font-size:1rem;line-height:1.6;">✅ [First actionable takeaway]</li>
-    <li style="display:flex;align-items:flex-start;gap:0.75rem;padding:1rem;background:rgba(40,167,69,0.08);border-radius:10px;font-size:1rem;line-height:1.6;">✅ [Second actionable takeaway]</li>
-    <li style="display:flex;align-items:flex-start;gap:0.75rem;padding:1rem;background:rgba(40,167,69,0.08);border-radius:10px;font-size:1rem;line-height:1.6;">✅ [Third actionable takeaway]</li>
-    <li style="display:flex;align-items:flex-start;gap:0.75rem;padding:1rem;background:rgba(40,167,69,0.08);border-radius:10px;font-size:1rem;line-height:1.6;">✅ [Fourth actionable takeaway]</li>
-    <li style="display:flex;align-items:flex-start;gap:0.75rem;padding:1rem;background:rgba(40,167,69,0.08);border-radius:10px;font-size:1rem;line-height:1.6;">✅ [Fifth actionable takeaway]</li>
-  </ul>
+### 7. KEY TAKEAWAYS BOX (Before conclusion - REQUIRED)
+<div class="wp-opt-takeaways">
+<strong>🎯 Key Takeaways</strong>
+<ul>
+<li>✅ [First specific, actionable takeaway]</li>
+<li>✅ [Second takeaway - something they can implement today]</li>
+<li>✅ [Third takeaway - ties back to main benefit]</li>
+<li>✅ [Fourth takeaway - addresses a common objection]</li>
+<li>✅ [Fifth takeaway - the "if you remember nothing else" point]</li>
+</ul>
 </div>
 
-### 8. CTA BOX (Use at mid-content and end):
-
-<div class="wp-opt-cta" style="margin:2.5rem 0;padding:2.5rem 2rem;text-align:center;background:linear-gradient(135deg,#0000FF 0%,#0000CC 100%);color:#fff;border-radius:12px;box-shadow:0 10px 40px -10px rgba(0,0,255,0.5);">
-  <strong style="display:block;font-size:1.5rem;font-weight:700;margin-bottom:0.75rem;color:#fff;">[Compelling headline with urgency]</strong>
-  <p style="font-size:1.1rem;opacity:0.9;margin-bottom:1.5rem;color:#fff;">[Value proposition - what they get]</p>
-  <a href="#" style="display:inline-block;padding:1rem 2.5rem;background:#fff;color:#0000CC;font-weight:700;font-size:1rem;border-radius:10px;text-decoration:none;box-shadow:0 4px 15px rgba(0,0,0,0.15);">[Button Text] →</a>
+### 8. CTA BOX (Use at mid-content and end)
+<div class="wp-opt-cta">
+<strong>[Compelling headline with urgency or value]</strong>
+<p>[1-2 sentences explaining the value proposition]</p>
+<a href="#">[Action Button Text] →</a>
 </div>
 
-### 9. COMPARISON TABLE:
-
-<div class="wp-opt-comparison" style="margin:2rem 0;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;box-shadow:0 4px 15px rgba(0,0,0,0.08);">
-  <table style="width:100%;border-collapse:collapse;margin:0;">
-    <thead style="background:linear-gradient(135deg,#EAF6FF,#dbeafe);">
-      <tr>
-        <th style="padding:1rem;text-align:left;font-weight:600;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#0000CC;border-bottom:2px solid #0000FF;">Factor</th>
-        <th style="padding:1rem;text-align:left;font-weight:600;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#0000CC;border-bottom:2px solid #0000FF;">Option A</th>
-        <th style="padding:1rem;text-align:left;font-weight:600;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#0000CC;border-bottom:2px solid #0000FF;">Option B</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr><td style="padding:0.75rem 1rem;border-bottom:1px solid #e2e8f0;">[Factor 1]</td><td style="padding:0.75rem 1rem;border-bottom:1px solid #e2e8f0;">[Value]</td><td style="padding:0.75rem 1rem;border-bottom:1px solid #e2e8f0;">[Value]</td></tr>
-      <tr><td style="padding:0.75rem 1rem;border-bottom:1px solid #e2e8f0;">[Factor 2]</td><td style="padding:0.75rem 1rem;border-bottom:1px solid #e2e8f0;">[Value]</td><td style="padding:0.75rem 1rem;border-bottom:1px solid #e2e8f0;">[Value]</td></tr>
-      <tr><td style="padding:0.75rem 1rem;">[Factor 3]</td><td style="padding:0.75rem 1rem;">[Value]</td><td style="padding:0.75rem 1rem;">[Value]</td></tr>
-    </tbody>
-  </table>
+### 9. COMPARISON TABLE
+<div class="wp-opt-comparison">
+<table>
+<thead>
+<tr>
+<th>Factor</th>
+<th>Option A</th>
+<th>Option B</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>[Factor 1]</td><td>[Value]</td><td>[Value]</td></tr>
+<tr><td>[Factor 2]</td><td>[Value]</td><td>[Value]</td></tr>
+<tr><td>[Factor 3]</td><td>[Value]</td><td>[Value]</td></tr>
+</tbody>
+</table>
 </div>
 
-### 10. VIDEO RECOMMENDATION:
-
-<div class="wp-opt-video" style="margin:2rem 0;padding:1.5rem 1.5rem 1.5rem 4rem;background:linear-gradient(135deg,#fee2e2 0%,#fecaca 30%,#fff 100%);border:1px solid #fecaca;border-left:5px solid #ef4444;border-radius:0 12px 12px 0;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);position:relative;">
-  <span style="position:absolute;top:1.25rem;left:1rem;font-size:1.75rem;">🎬</span>
-  <strong style="display:block;font-size:1rem;font-weight:700;color:#b91c1c;margin-bottom:0.5rem;">Watch This</strong>
-  <p style="margin:0.25rem 0;font-size:0.95rem;line-height:1.6;color:#333;">Search YouTube: "[specific search query]"</p>
-  <p style="margin:0.25rem 0;font-size:0.85rem;color:#666;font-style:italic;">[Why this video adds value]</p>
+### 10. VIDEO RECOMMENDATION
+<div class="wp-opt-video">
+<strong>🎬 Watch This</strong>
+<p>Search YouTube: "[specific search query to find relevant video]"</p>
+<p>[Why this video is valuable to the reader]</p>
 </div>
 
-### 11. RESEARCH REFERENCE:
-
-<div class="wp-opt-research" style="margin:2rem 0;padding:1.5rem 1.5rem 1.5rem 4rem;background:linear-gradient(135deg,#ede9fe 0%,#e9d5ff 30%,#fff 100%);border:1px solid #c4b5fd;border-left:5px solid #8b5cf6;border-radius:0 12px 12px 0;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);position:relative;">
-  <span style="position:absolute;top:1.25rem;left:1rem;font-size:1.75rem;">📊</span>
-  <strong style="display:block;font-size:1rem;font-weight:700;color:#6d28d9;margin-bottom:0.5rem;">The Research Says</strong>
-  <p style="margin:0.25rem 0;font-size:0.95rem;line-height:1.6;color:#333;"><strong>[Study Name]:</strong> [Key finding]</p>
-  <p style="margin:0.25rem 0;font-size:0.95rem;line-height:1.6;color:#333;">[Why this matters to the reader]</p>
+### 11. RESEARCH REFERENCE
+<div class="wp-opt-research">
+<strong>📊 The Research Says</strong>
+<p><strong>[Study/Source Name]:</strong> [Key finding in plain language]</p>
+<p>[Why this matters to the reader's situation]</p>
 </div>
 
 ## 📋 REQUIRED CONTENT STRUCTURE:
 
-1. <h1>[SEO Title]</h1>
-2. Opening paragraph (hook the reader - Hormozi style)
-3. **TL;DR BOX** ← REQUIRED
-4. <h2>[Question Format H2]</h2>
-   - Content paragraphs
-   - **PRO TIP BOX** ← Use here
-5. <h2>[Question Format H2]</h2>
-   - Content paragraphs
-   - **KEY INSIGHT BOX** ← Use here
-   - **STAT BOX** ← Use here
-6. <h2>[Question Format H2]</h2>
-   - Content paragraphs
-   - **WARNING BOX** ← Use here
-   - **EXPERT QUOTE BOX** ← Use here
-7. <h2>[Question Format H2]</h2>
-   - Content paragraphs
-   - **COMPARISON TABLE** ← Use here
-   - **CTA BOX** ← Use mid-content
-8. <h2>[Question Format H2]</h2>
-   - Content paragraphs
-   - **PRO TIP BOX** ← Another one
-9. **KEY TAKEAWAYS BOX** ← REQUIRED before conclusion
-10. Conclusion paragraph
-11. **CTA BOX** ← Final CTA
+1. <h1>[SEO-Optimized Title]</h1>
+2. Opening paragraph (2-3 sentences, hook the reader immediately)
+3. <div class="wp-opt-tldr">...</div> ← TL;DR BOX HERE
+4. <h2>[Question-Format H2]?</h2>
+   - 2-3 paragraphs
+   - <div class="wp-opt-tip">...</div> ← PRO TIP
+5. <h2>[Question-Format H2]?</h2>
+   - 2-3 paragraphs
+   - <div class="wp-opt-insight">...</div> ← KEY INSIGHT
+   - <div class="wp-opt-stat">...</div> ← STAT BOX
+6. <h2>[Question-Format H2]?</h2>
+   - 2-3 paragraphs
+   - <div class="wp-opt-warning">...</div> ← WARNING
+   - <div class="wp-opt-quote">...</div> ← EXPERT QUOTE
+7. <h2>[Question-Format H2]?</h2>
+   - 2-3 paragraphs
+   - <div class="wp-opt-comparison">...</div> ← TABLE
+   - <div class="wp-opt-cta">...</div> ← MID CTA
+8. <h2>[Question-Format H2]?</h2>
+   - 2-3 paragraphs
+   - <div class="wp-opt-tip">...</div> ← ANOTHER PRO TIP
+   - <div class="wp-opt-research">...</div> ← RESEARCH
+9. <div class="wp-opt-takeaways">...</div> ← KEY TAKEAWAYS (REQUIRED)
+10. Conclusion paragraph (2-3 sentences)
+11. <div class="wp-opt-cta">...</div> ← FINAL CTA
 
-## 📤 OUTPUT FORMAT (JSON):
+## 📤 JSON OUTPUT FORMAT:
 
 Return ONLY valid JSON. No markdown code fences. No explanations.
 
 {
-  "optimizedTitle": "SEO title under 60 chars",
-  "metaDescription": "Meta description 150-160 chars with CTA",
-  "h1": "Main H1",
-  "h2s": ["H2 1", "H2 2", "H2 3", "H2 4", "H2 5"],
+  "optimizedTitle": "SEO title under 60 chars with primary keyword",
+  "metaDescription": "Compelling 150-160 char description with CTA",
+  "h1": "Main H1 heading",
+  "h2s": ["H2 Question 1?", "H2 Question 2?", "H2 Question 3?", "H2 Question 4?", "H2 Question 5?"],
   "tldrSummary": ["Point 1", "Point 2", "Point 3", "Point 4", "Point 5"],
   "expertQuote": {"quote": "...", "author": "...", "role": "..."},
-  "youtubeEmbed": {"searchQuery": "...", "suggestedTitle": "...", "context": "..."},
-  "patentReference": {"type": "research", "identifier": "...", "title": "...", "summary": "..."},
-  "optimizedContent": "<FULL HTML WITH ALL STYLED DIVS - ${advanced.minWordCount}+ WORDS>",
-  "faqs": [{"question": "...", "answer": "..."}, ...],
-  "keyTakeaways": ["...", "...", "...", "...", "..."],
-  "ctas": [{"text": "...", "position": "mid", "style": "primary"}, {"text": "...", "position": "end", "style": "primary"}],
-  "tableOfContents": ["H2 1", "H2 2", "H2 3", "H2 4", "H2 5"],
-  "contentStrategy": {"wordCount": ${advanced.minWordCount}, "readabilityScore": 75, "keywordDensity": 0.02, "lsiKeywords": []},
-  "internalLinks": [],
-  "schema": {},
-  "aiSuggestions": {"contentGaps": "", "quickWins": "", "improvements": []},
+  "optimizedContent": "<FULL HTML WITH ALL wp-opt-* STYLED DIVS - ${settings.minWordCount}+ WORDS>",
+  "faqs": [{"question": "...", "answer": "..."}, {"question": "...", "answer": "..."}],
+  "keyTakeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3", "Takeaway 4", "Takeaway 5"],
+  "contentStrategy": {"wordCount": ${settings.minWordCount}, "readabilityScore": 75, "keywordDensity": 0.02, "lsiKeywords": []},
   "qualityScore": 85,
   "seoScore": 85,
   "readabilityScore": 80,
   "engagementScore": 85
 }
 
-## ⚠️ FINAL REMINDER - READ THIS:
+## ⚠️ FINAL CHECKLIST - YOUR optimizedContent MUST INCLUDE:
 
-Your "optimizedContent" field MUST include:
-- 1x wp-opt-tldr div (TL;DR box)
-- 2-3x wp-opt-tip divs (Pro Tips)
-- 1-2x wp-opt-warning divs (Warnings)
-- 2-3x wp-opt-insight divs (Key Insights)
-- 2-3x wp-opt-stat divs (Stats)
-- 1x wp-opt-quote div (Expert Quote)
-- 1x wp-opt-takeaways div (Key Takeaways)
-- 2x wp-opt-cta divs (CTAs)
-- 1x wp-opt-comparison div (Table)
-- 1x wp-opt-video div (Video)
-- 1x wp-opt-research div (Research)
+✅ 1x <div class="wp-opt-tldr"> (TL;DR box after intro)
+✅ 2-3x <div class="wp-opt-tip"> (Pro Tips throughout)
+✅ 1-2x <div class="wp-opt-warning"> (Warning boxes)
+✅ 2-3x <div class="wp-opt-insight"> (Key Insights)
+✅ 2-3x <div class="wp-opt-stat"> (Stat callouts)
+✅ 1x <div class="wp-opt-quote"> (Expert Quote)
+✅ 1x <div class="wp-opt-takeaways"> (Key Takeaways before conclusion)
+✅ 2x <div class="wp-opt-cta"> (CTAs - mid and end)
+✅ 1x <div class="wp-opt-comparison"> (Comparison table)
+✅ 1x <div class="wp-opt-video"> (Video recommendation)
+✅ 1x <div class="wp-opt-research"> (Research reference)
+✅ 5+ <h2> headings in question format
+✅ ${settings.minWordCount}+ total words
 
-DO NOT output plain paragraphs without these styled boxes!`;
+If ANY of these are missing, you have FAILED. Output HTML, not plain text!`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // USER PROMPT BUILDER
 // ═══════════════════════════════════════════════════════════════════════════════
 function buildUserPrompt(
-  pageTitle: string,
-  pageContent: string,
+  title: string,
+  content: string,
   keyword: string,
-  internalLinks: InternalLinkCandidate[],
-  neuronWriter: NeuronWriterRecommendations | null,
-  advanced: AdvancedSettings,
-  siteContext: SiteContext | undefined
+  links: InternalLink[],
+  neuron: NeuronWriterRecommendations | null,
+  settings: AdvancedSettings,
+  context: SiteContext | undefined
 ): string {
-  const linksSection = internalLinks.length > 0 ? `
-INTERNAL LINKS TO USE (pick 10-15):
-${internalLinks.slice(0, 30).map(l => `- ${l.title}: ${l.url}`).join('\n')}
+  const linksSection = links.length > 0 
+    ? `\n\nINTERNAL LINKS TO USE (10-15 throughout):\n${links.slice(0, 30).map(l => `- ${l.title}: ${l.url}`).join('\n')}\n\nONLY use URLs from this list.`
+    : '';
 
-ONLY use URLs from this list. Do NOT invent URLs.
-` : '';
+  const neuronSection = neuron?.status === 'ready'
+    ? `\n\nNEURONWRITER DATA:\n- Terms for title: ${neuron.titleTerms || 'N/A'}\n- Terms for H2s: ${neuron.h2Terms || 'N/A'}\n- Content terms: ${neuron.contentTerms || 'N/A'}\n- Questions: ${neuron.questions?.peopleAlsoAsk?.slice(0, 5).join(', ') || 'N/A'}`
+    : '';
 
-  const neuronSection = neuronWriter?.status === 'ready' ? `
-NEURONWRITER DATA:
-- Title Terms: ${neuronWriter.titleTerms || 'N/A'}
-- H2 Terms: ${neuronWriter.h2Terms || 'N/A'}
-- Content Terms: ${neuronWriter.contentTerms || 'N/A'}
-- Questions: ${neuronWriter.questions?.peopleAlsoAsk?.slice(0, 5).join(', ') || 'N/A'}
-` : '';
+  return `## TRANSFORM THIS CONTENT INTO BEAUTIFUL HTML:
 
-  return `
-## TRANSFORM THIS CONTENT INTO BEAUTIFUL HTML:
-
-**Title:** ${pageTitle}
-**Keyword:** ${keyword}
-**Word Count Required:** ${advanced.minWordCount}-${advanced.maxWordCount} words
+**Title:** ${title}
+**Primary Keyword:** ${keyword}
+**Required Word Count:** ${settings.minWordCount}-${settings.maxWordCount} words
 
 **Original Content:**
-${pageContent.substring(0, 20000)}
-
+${content.substring(0, 20000)}
 ${neuronSection}
 ${linksSection}
 
 ## CRITICAL REQUIREMENTS:
 
-1. optimizedContent MUST be ${advanced.minWordCount}+ words of HTML
-2. You MUST include ALL these styled HTML blocks:
-   - 1x <div class="wp-opt-tldr"> (TL;DR box - after intro)
-   - 2-3x <div class="wp-opt-tip"> (Pro Tips)
-   - 1-2x <div class="wp-opt-warning"> (Warnings)
-   - 2-3x <div class="wp-opt-insight"> (Insights)
-   - 2-3x <div class="wp-opt-stat"> (Stats)
-   - 1x <div class="wp-opt-quote"> (Expert Quote)
-   - 1x <div class="wp-opt-takeaways"> (Key Takeaways - before conclusion)
-   - 2x <div class="wp-opt-cta"> (CTAs - mid + end)
-   - 1x <div class="wp-opt-comparison"> (Table)
-   - 1x <div class="wp-opt-video"> (Video recommendation)
-   - 1x <div class="wp-opt-research"> (Research reference)
+1. Your "optimizedContent" MUST be ${settings.minWordCount}+ words of HTML
+2. You MUST include ALL these styled HTML components:
+   - 1x wp-opt-tldr (TL;DR box)
+   - 2-3x wp-opt-tip (Pro Tips)
+   - 1-2x wp-opt-warning (Warnings)
+   - 2-3x wp-opt-insight (Insights)
+   - 2-3x wp-opt-stat (Stats)
+   - 1x wp-opt-quote (Expert Quote)
+   - 1x wp-opt-takeaways (Key Takeaways)
+   - 2x wp-opt-cta (CTAs)
+   - 1x wp-opt-comparison (Table)
+   - 1x wp-opt-video (Video recommendation)
+   - 1x wp-opt-research (Research reference)
+3. Write in Alex Hormozi style - punchy, direct, specific numbers
+4. 5+ H2 headings in question format
 
-3. DO NOT output plain paragraphs without styled boxes
-4. Use the EXACT HTML templates from the system prompt
-5. Write in Alex Hormozi style
-
-Return ONLY the JSON object. No markdown.`;
+Return ONLY the JSON. No code fences. No markdown.`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function updateJobProgress(
+async function updateJob(
   supabase: ReturnType<typeof createClient>,
   jobId: string,
   step: string,
@@ -443,459 +346,201 @@ async function updateJobProgress(
     }).eq('id', jobId);
     logger.info(`Progress: ${step} (${progress}%)`);
   } catch (e) {
-    logger.warn('Failed to update progress');
+    logger.warn('Progress update failed');
   }
 }
 
-async function markJobFailed(
+async function failJob(
   supabase: ReturnType<typeof createClient>,
   jobId: string,
   pageId: string,
-  errorMessage: string,
+  error: string,
   logger: Logger
 ) {
-  try {
-    await supabase.from('jobs').update({
-      status: 'failed',
-      error_message: errorMessage,
-      completed_at: new Date().toISOString(),
-    }).eq('id', jobId);
-
-    await supabase.from('pages').update({ status: 'failed' }).eq('id', pageId);
-
-    await supabase.from('activity_log').insert({
-      page_id: pageId,
-      job_id: jobId,
-      type: 'error',
-      message: `Failed: ${errorMessage}`,
-    });
-
-    logger.error('Job failed', { errorMessage });
-  } catch (e) {
-    logger.error('Failed to mark job as failed');
-  }
+  await supabase.from('jobs').update({
+    status: 'failed',
+    error_message: error,
+    completed_at: new Date().toISOString(),
+  }).eq('id', jobId);
+  await supabase.from('pages').update({ status: 'failed' }).eq('id', pageId);
+  logger.error('Job failed', { error });
 }
 
 function deriveKeyword(title: string, slug: string): string {
-  let keyword = title
-    .replace(/\s*[-|–—]\s*.*$/, '')
-    .replace(/[^\w\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-
-  if (keyword.length < 10 && slug) {
-    keyword = slug.replace(/-/g, ' ').trim();
-  }
-
-  return keyword.substring(0, 100);
+  let kw = title.replace(/\s*[-|–—]\s*.*$/, '').replace(/[^\w\s]/g, ' ').trim().toLowerCase();
+  if (kw.length < 10 && slug) kw = slug.replace(/-/g, ' ').trim();
+  return kw.substring(0, 100);
 }
 
-async function fetchPageContent(
-  siteUrl: string,
-  pageUrl: string,
-  username: string,
-  applicationPassword: string,
-  logger: Logger
-): Promise<{ title: string; content: string; postId?: number }> {
-  const normalizedUrl = siteUrl.replace(/\/+$/, '');
-  const authHeader = 'Basic ' + btoa(`${username}:${applicationPassword.replace(/\s+/g, '')}`);
+async function fetchPage(siteUrl: string, pageUrl: string, user: string, pass: string, logger: Logger) {
+  const url = siteUrl.replace(/\/+$/, '');
+  const auth = 'Basic ' + btoa(`${user}:${pass.replace(/\s+/g, '')}`);
   const slug = pageUrl.split('/').filter(Boolean).pop() || '';
   
-  let apiUrl = `${normalizedUrl}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&context=edit`;
-  logger.info('Fetching page content', { apiUrl });
+  let apiUrl = `${url}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&context=edit`;
+  let res = await fetch(apiUrl, { headers: { Authorization: auth, Accept: 'application/json' } });
+  let posts = await res.json();
   
-  let response = await fetch(apiUrl, {
-    headers: {
-      'Accept': 'application/json',
-      'Authorization': authHeader,
-      'User-Agent': 'WP-Optimizer-Pro/4.0',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch page: ${response.status}`);
-  }
-
-  let posts = await response.json();
-  
-  if (!posts || posts.length === 0) {
-    apiUrl = `${normalizedUrl}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}&context=edit`;
-    response = await fetch(apiUrl, {
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': authHeader,
-        'User-Agent': 'WP-Optimizer-Pro/4.0',
-      },
-    });
-    
-    if (response.ok) {
-      posts = await response.json();
-    }
+  if (!posts?.length) {
+    apiUrl = `${url}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}&context=edit`;
+    res = await fetch(apiUrl, { headers: { Authorization: auth, Accept: 'application/json' } });
+    posts = await res.json();
   }
   
-  if (!posts || posts.length === 0) {
-    throw new Error('Page not found');
-  }
-
-  const post = posts[0];
+  if (!posts?.length) throw new Error('Page not found');
+  
   return {
-    title: post.title?.raw || post.title?.rendered || '',
-    content: post.content?.raw || post.content?.rendered || '',
-    postId: post.id,
+    title: posts[0].title?.raw || posts[0].title?.rendered || '',
+    content: posts[0].content?.raw || posts[0].content?.rendered || '',
   };
 }
 
-async function fetchInternalLinks(
-  supabase: ReturnType<typeof createClient>,
-  siteId: string | null,
-  currentPageId: string,
+async function fetchLinks(supabase: ReturnType<typeof createClient>, siteId: string | null, pageId: string): Promise<InternalLink[]> {
+  try {
+    let q = supabase.from('pages').select('url, title').neq('id', pageId).limit(100);
+    if (siteId) q = q.eq('site_id', siteId);
+    const { data } = await q;
+    return (data || []).map(p => ({ url: p.url, title: p.title }));
+  } catch { return []; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI PROVIDER CALL
+// ═══════════════════════════════════════════════════════════════════════════════
+async function callAI(
+  provider: AIProvider,
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
   logger: Logger
-): Promise<InternalLinkCandidate[]> {
-  try {
-    let query = supabase
-      .from('pages')
-      .select('url, slug, title')
-      .neq('id', currentPageId)
-      .limit(100);
-
-    if (siteId) {
-      query = query.eq('site_id', siteId);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      return [];
-    }
-
-    return (data || []).map(p => ({
-      url: p.url,
-      slug: p.slug,
-      title: p.title,
-    }));
-  } catch (e) {
-    return [];
-  }
-}
-
-async function fetchNeuronWriterRecommendations(
-  supabaseUrl: string,
-  supabaseKey: string,
-  neuronWriter: NeuronWriterConfig,
-  keyword: string,
-  language: string,
-  logger: Logger,
-  jobId: string,
-  supabase: ReturnType<typeof createClient>
-): Promise<NeuronWriterRecommendations | null> {
-  const maxAttempts = 10;
-  const pollInterval = 8000;
-
-  logger.info('Fetching NeuronWriter', { keyword });
-
-  try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/neuronwriter`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${supabaseKey}`,
-      },
-      body: JSON.stringify({
-        action: 'get-recommendations',
-        apiKey: neuronWriter.apiKey,
-        projectId: neuronWriter.projectId,
-        keyword,
-        language: language || 'English',
-      }),
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    let data = await response.json();
-
-    if (data.status === 'ready') {
-      return data;
-    }
-
-    if (!data.queryId) {
-      return null;
-    }
-
-    const queryId = data.queryId;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      await new Promise(r => setTimeout(r, pollInterval));
-      await updateJobProgress(supabase, jobId, 'waiting_neuronwriter', 25 + attempt * 2, logger);
-
-      const pollResponse = await fetch(`${supabaseUrl}/functions/v1/neuronwriter`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseKey}`,
-        },
-        body: JSON.stringify({
-          action: 'get-query',
-          apiKey: neuronWriter.apiKey,
-          queryId,
-        }),
-      });
-
-      if (pollResponse.ok) {
-        data = await pollResponse.json();
-        if (data.status === 'ready' || data.recommendations?.status === 'ready') {
-          return data.recommendations || data;
-        }
-      }
-    }
-
-    return null;
-  } catch (error) {
-    logger.error('NeuronWriter error');
-    return null;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// AI PROVIDER CALLS WITH TIMEOUT
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function callAIWithTimeout(
-  provider: AIProvider,
-  apiKey: string,
-  model: string,
-  systemPrompt: string,
-  userPrompt: string,
-  logger: Logger,
-  timeoutMs: number = 180000
-): Promise<{ content: string; tokensUsed: number }> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const result = await callAIProvider(provider, apiKey, model, systemPrompt, userPrompt, logger, controller.signal);
-    clearTimeout(timeoutId);
-    return result;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('AI request timed out after 3 minutes');
-    }
-    throw error;
-  }
-}
-
-async function callAIProvider(
-  provider: AIProvider,
-  apiKey: string,
-  model: string,
-  systemPrompt: string,
-  userPrompt: string,
-  logger: Logger,
-  signal?: AbortSignal
-): Promise<{ content: string; tokensUsed: number }> {
-  logger.info('Calling AI', { provider, model });
+): Promise<string> {
   const maxTokens = 16000;
+  logger.info('Calling AI', { provider, model });
 
-  switch (provider) {
-    case 'google': {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal,
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] }],
-          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 },
-        }),
-      });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180000);
 
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Google API error: ${response.status} - ${error.substring(0, 200)}`);
+  try {
+    let response: Response;
+    let result: string = '';
+
+    switch (provider) {
+      case 'google': {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] }],
+            generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 },
+          }),
+        });
+        const data = await response.json();
+        result = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        break;
       }
 
-      const data = await response.json();
-      return {
-        content: data.candidates?.[0]?.content?.parts?.[0]?.text || '',
-        tokensUsed: data.usageMetadata?.totalTokenCount || 0,
-      };
-    }
-
-    case 'openai': {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        signal,
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-          max_tokens: maxTokens,
-          temperature: 0.7,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`OpenAI API error: ${response.status}`);
+      case 'openai': {
+        response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+            max_tokens: maxTokens,
+            temperature: 0.7,
+          }),
+        });
+        const data = await response.json();
+        result = data.choices?.[0]?.message?.content || '';
+        break;
       }
 
-      const data = await response.json();
-      return {
-        content: data.choices?.[0]?.message?.content || '',
-        tokensUsed: data.usage?.total_tokens || 0,
-      };
-    }
-
-    case 'anthropic': {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        signal,
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }],
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Anthropic API error: ${response.status}`);
+      case 'anthropic': {
+        response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model,
+            max_tokens: maxTokens,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+          }),
+        });
+        const data = await response.json();
+        result = data.content?.[0]?.text || '';
+        break;
       }
 
-      const data = await response.json();
-      return {
-        content: data.content?.[0]?.text || '',
-        tokensUsed: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
-      };
-    }
-
-    case 'groq': {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        signal,
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-          max_tokens: maxTokens,
-          temperature: 0.7,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Groq API error: ${response.status}`);
+      case 'groq': {
+        response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+            max_tokens: maxTokens,
+            temperature: 0.7,
+          }),
+        });
+        const data = await response.json();
+        result = data.choices?.[0]?.message?.content || '';
+        break;
       }
 
-      const data = await response.json();
-      return {
-        content: data.choices?.[0]?.message?.content || '',
-        tokensUsed: data.usage?.total_tokens || 0,
-      };
-    }
-
-    case 'openrouter': {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'HTTP-Referer': 'https://wp-optimizer.pro',
-          'X-Title': 'WP Optimizer Pro',
-        },
-        signal,
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-          max_tokens: maxTokens,
-          temperature: 0.7,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`OpenRouter API error: ${response.status}`);
+      case 'openrouter': {
+        response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+            max_tokens: maxTokens,
+            temperature: 0.7,
+          }),
+        });
+        const data = await response.json();
+        result = data.choices?.[0]?.message?.content || '';
+        break;
       }
-
-      const data = await response.json();
-      return {
-        content: data.choices?.[0]?.message?.content || '',
-        tokensUsed: data.usage?.total_tokens || 0,
-      };
     }
 
-    default:
-      throw new Error(`Unsupported provider: ${provider}`);
+    clearTimeout(timeout);
+    return result;
+  } catch (e) {
+    clearTimeout(timeout);
+    throw e;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ROBUST JSON PARSER
+// JSON PARSER
 // ═══════════════════════════════════════════════════════════════════════════════
-
-function parseAIResponse(content: string, logger: Logger): OptimizationResult {
-  logger.info('Parsing AI response', { length: content.length });
-  
-  let cleaned = content.trim();
-  
-  cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '');
-  cleaned = cleaned.replace(/\s*```$/i, '');
-  cleaned = cleaned.trim();
-const jsonStart = cleaned.indexOf('{'); const jsonEnd = cleaned.lastIndexOf('}');
-if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) { logger.error('No JSON found'); throw new Error('No valid JSON found in AI response'); }
-cleaned = cleaned.slice(jsonStart, jsonEnd + 1);
-try { cleaned = cleaned.replace(/,\s*([}]])/g, '$1'); const parsed = JSON.parse(cleaned);
-text
-
-
-if (!parsed.optimizedTitle) {
-  throw new Error('Missing optimizedTitle');
-}
-if (!parsed.optimizedContent) {
-  throw new Error('Missing optimizedContent');
-}
-text
-
-
-logger.info('Parsed successfully');
-return parsed as OptimizationResult;
-} catch (e) { logger.error('JSON parse error', { error: e instanceof Error ? e.message : 'Unknown' }); throw new Error(Failed to parse AI response: ${e instanceof Error ? e.message : 'Unknown'}); } }
-// ═══════════════════════════════════════════════════════════════════════════════ // QUALITY VALIDATION WITH STYLED BLOCKS CHECK // ═══════════════════════════════════════════════════════════════════════════════
-function validateQuality( result: OptimizationResult, minWordCount: number, logger: Logger ): { valid: boolean; issues: string[]; score: number } { const issues: string[] = []; let score = 100;
-const content = result.optimizedContent || ''; const wordCount = content.split(/\s+/).filter(Boolean).length;
-// Word count check if (wordCount < minWordCount * 0.8) { issues.push(Word count ${wordCount} below ${minWordCount}); score -= 30; }
-// CRITICAL: Check for styled blocks if (!content.includes('wp-opt-tldr')) { issues.push('Missing TL;DR box (wp-opt-tldr)'); score -= 15; } if (!content.includes('wp-opt-takeaways')) { issues.push('Missing Key Takeaways box (wp-opt-takeaways)'); score -= 15; } if (!content.includes('wp-opt-tip')) { issues.push('Missing Pro Tip boxes (wp-opt-tip)'); score -= 10; } if (!content.includes('wp-opt-warning')) { issues.push('Missing Warning box (wp-opt-warning)'); score -= 5; } if (!content.includes('wp-opt-insight')) { issues.push('Missing Insight boxes (wp-opt-insight)'); score -= 5; } if (!content.includes('wp-opt-quote')) { issues.push('Missing Expert Quote (wp-opt-quote)'); score -= 5; } if (!content.includes('wp-opt-stat')) { issues.push('Missing Stat boxes (wp-opt-stat)'); score -= 5; } if (!content.includes('wp-opt-cta')) { issues.push('Missing CTA boxes (wp-opt-cta)'); score -= 5; } if (!content.includes('wp-opt-comparison') && !content.includes('<table')) { issues.push('Missing comparison table'); score -= 5; }
-// H2 count const h2Count = (content.match(/<h2/gi) || []).length; if (h2Count < 4) { issues.push(Only ${h2Count} H2s, need 5+); score -= 10; }
-logger.info('Quality validation', { wordCount, h2Count, score, issues });
-return { valid: score >= 50, issues, score: Math.max(0, score), }; }
-function calculateFinalScore(result: OptimizationResult, minWordCount: number): number { let score = 50;
-const content = result.optimizedContent || ''; const wordCount = content.split(/\s+/).filter(Boolean).length;
-if (wordCount >= minWordCount) score += 15; if (result.tldrSummary?.length >= 4) score += 5; if (result.expertQuote?.quote) score += 5; if (result.faqs?.length >= 5) score += 5; if (result.keyTakeaways?.length >= 5) score += 5;
-// Bonus for styled blocks if (content.includes('wp-opt-tldr')) score += 3; if (content.includes('wp-opt-takeaways')) score += 3; if (content.includes('wp-opt-tip')) score += 2; if (content.includes('wp-opt-quote')) score += 2; if (content.includes('wp-opt-stat')) score += 2; if (content.includes('wp-opt-cta')) score += 3;
-return Math.min(100, Math.max(0, score)); }
-// ═══════════════════════════════════════════════════════════════════════════════ // MAIN SERVE FUNCTION // ═══════════════════════════════════════════════════════════════════════════════
-serve(async (req) => { if (req.method === 'OPTIONS') { return new Response(null, { headers: corsHeaders }); }
-const logger = new Logger('optimize-content-v4');
+function parseResponse(content: string, logger: Logger): Record<string, unknown> {
+  let cleaned = content.trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+const start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}'); if (start === -1 || end === -1) throw new Error('No JSON found');
+cleaned = cleaned.slice(start, end + 1).replace(/,\s*([}]])/g, '$1');
+const parsed = JSON.parse(cleaned); if (!parsed.optimizedTitle || !parsed.optimizedContent) { throw new Error('Missing required fields'); }
+return parsed; }
+// ═══════════════════════════════════════════════════════════════════════════════ // QUALITY VALIDATION - CHECK FOR STYLED COMPONENTS // ═══════════════════════════════════════════════════════════════════════════════ function validateQuality(result: Record<string, unknown>, minWords: number, logger: Logger): { score: number; issues: string[] } { const issues: string[] = []; let score = 100;
+const content = (result.optimizedContent as string) || ''; const words = content.split(/\s+/).filter(Boolean).length;
+// Word count if (words < minWords * 0.8) { issues.push(Word count ${words} below ${minWords}); score -= 30; }
+// CRITICAL: Check for styled components const requiredComponents = [ { class: 'wp-opt-tldr', name: 'TL;DR box', penalty: 15 }, { class: 'wp-opt-takeaways', name: 'Key Takeaways', penalty: 15 }, { class: 'wp-opt-tip', name: 'Pro Tip boxes', penalty: 10 }, { class: 'wp-opt-insight', name: 'Insight boxes', penalty: 5 }, { class: 'wp-opt-warning', name: 'Warning box', penalty: 5 }, { class: 'wp-opt-quote', name: 'Expert Quote', penalty: 5 }, { class: 'wp-opt-stat', name: 'Stat boxes', penalty: 5 }, { class: 'wp-opt-cta', name: 'CTA boxes', penalty: 5 }, { class: 'wp-opt-comparison', name: 'Comparison table', penalty: 5 }, ];
+for (const comp of requiredComponents) { if (!content.includes(comp.class)) { issues.push(Missing ${comp.name} (${comp.class})); score -= comp.penalty; } }
+// H2 count const h2s = (content.match(/<h2/gi) || []).length; if (h2s < 4) { issues.push(Only ${h2s} H2s (need 5+)); score -= 10; }
+logger.info('Quality check', { words, h2s, score, issues }); return { score: Math.max(0, score), issues }; }
+// ═══════════════════════════════════════════════════════════════════════════════ // MAIN HANDLER // ═══════════════════════════════════════════════════════════════════════════════ serve(async (req) => { if (req.method === 'OPTIONS') { return new Response(null, { headers: corsHeaders }); }
+const logger = new Logger();
 try { const request: OptimizeRequest = await req.json(); const { pageId, siteUrl, username, applicationPassword, aiConfig, neuronWriter, advanced, siteContext } = request;
 text
 
@@ -905,10 +550,9 @@ text
 
 
 if (!pageId || !siteUrl || !username || !applicationPassword) {
-  return new Response(
-    JSON.stringify({ success: false, error: 'Missing required fields' }),
-    { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+  return new Response(JSON.stringify({ success: false, error: 'Missing required fields' }), {
+    status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
 }
 text
 
@@ -919,47 +563,36 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 text
 
 
-const { data: pageData, error: pageError } = await supabase
-  .from('pages')
-  .select('*')
-  .eq('id', pageId)
-  .single();
-text
-
-
-if (pageError || !pageData) {
-  return new Response(
-    JSON.stringify({ success: false, error: 'Page not found' }),
-    { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+// Get page
+const { data: page, error: pageErr } = await supabase.from('pages').select('*').eq('id', pageId).single();
+if (pageErr || !page) {
+  return new Response(JSON.stringify({ success: false, error: 'Page not found' }), {
+    status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
 }
 text
 
 
-const { data: jobData, error: jobError } = await supabase
-  .from('jobs')
-  .insert({
-    page_id: pageId,
-    status: 'running',
-    current_step: 'initializing',
-    progress: 5,
-    started_at: new Date().toISOString(),
-  })
-  .select()
-  .single();
+// Create job
+const { data: job } = await supabase.from('jobs').insert({
+  page_id: pageId,
+  status: 'running',
+  current_step: 'starting',
+  progress: 5,
+  started_at: new Date().toISOString(),
+}).select().single();
 text
 
 
-if (jobError || !jobData) {
-  return new Response(
-    JSON.stringify({ success: false, error: 'Failed to create job' }),
-    { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+if (!job) {
+  return new Response(JSON.stringify({ success: false, error: 'Failed to create job' }), {
+    status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
 }
 text
 
 
-const jobId = jobData.id;
+const jobId = job.id;
 await supabase.from('pages').update({ status: 'optimizing' }).eq('id', pageId);
 text
 
@@ -980,132 +613,67 @@ text
 
 try {
   // Step 1: Fetch content
-  await updateJobProgress(supabase, jobId, 'fetching_content', 10, logger);
-  
-  const { title, content } = await fetchPageContent(
-    siteUrl,
-    pageData.url,
-    username,
-    applicationPassword,
-    logger
-  );
-text
-
-
-  if (!content || content.length < 100) {
-    throw new Error('Page content too short');
-  }
+  await updateJob(supabase, jobId, 'fetching', 10, logger);
+  const { title, content } = await fetchPage(siteUrl, page.url, username, applicationPassword, logger);
+  if (content.length < 100) throw new Error('Content too short');
 text
 
 
   // Step 2: Get keyword
-  const keyword = request.targetKeyword || deriveKeyword(title, pageData.slug);
+  const keyword = request.targetKeyword || deriveKeyword(title, page.slug);
   logger.info('Keyword', { keyword });
 text
 
 
-  // Step 3: Internal links
-  await updateJobProgress(supabase, jobId, 'fetching_links', 20, logger);
-  const internalLinks = await fetchInternalLinks(supabase, pageData.site_id, pageId, logger);
+  // Step 3: Get links
+  await updateJob(supabase, jobId, 'links', 20, logger);
+  const links = await fetchLinks(supabase, page.site_id, pageId);
 text
 
 
-  // Step 4: NeuronWriter (optional)
-  let neuronWriterData: NeuronWriterRecommendations | null = null;
-  if (neuronWriter?.enabled && neuronWriter?.apiKey && neuronWriter?.projectId) {
-    await updateJobProgress(supabase, jobId, 'fetching_neuronwriter', 25, logger);
-    neuronWriterData = await fetchNeuronWriterRecommendations(
-      supabaseUrl,
-      supabaseKey,
-      neuronWriter,
-      keyword,
-      request.language || 'English',
-      logger,
-      jobId,
-      supabase
-    );
-  }
-text
-
-
-  // Step 5: Generate content
-  await updateJobProgress(supabase, jobId, 'generating_content', 50, logger);
-text
-
-
+  // Step 4: Build prompts
+  await updateJob(supabase, jobId, 'generating', 40, logger);
   const systemPrompt = buildSystemPrompt(settings);
-  const userPrompt = buildUserPrompt(
-    title,
-    content,
-    keyword,
-    internalLinks,
-    neuronWriterData,
-    settings,
-    siteContext
-  );
+  const userPrompt = buildUserPrompt(title, content, keyword, links, null, settings, siteContext);
 text
 
 
+  // Step 5: Call AI
   const provider = aiConfig?.provider || 'google';
   const apiKey = aiConfig?.apiKey || Deno.env.get('GOOGLE_API_KEY') || '';
   const model = aiConfig?.model || 'gemini-2.0-flash';
 text
 
 
-  if (!apiKey) {
-    throw new Error('No AI API key configured');
-  }
+  if (!apiKey) throw new Error('No API key');
 text
 
 
-  const { content: aiResponse, tokensUsed } = await callAIWithTimeout(
-    provider,
-    apiKey,
-    model,
-    systemPrompt,
-    userPrompt,
-    logger,
-    180000
-  );
-text
-
-
-  logger.info('AI response received', { tokensUsed, length: aiResponse.length });
+  await updateJob(supabase, jobId, 'ai_processing', 50, logger);
+  const aiResponse = await callAI(provider, apiKey, model, systemPrompt, userPrompt, logger);
 text
 
 
   // Step 6: Parse
-  await updateJobProgress(supabase, jobId, 'processing', 80, logger);
-  const optimization = parseAIResponse(aiResponse, logger);
+  await updateJob(supabase, jobId, 'parsing', 80, logger);
+  const result = parseResponse(aiResponse, logger);
 text
 
 
   // Step 7: Validate
-  await updateJobProgress(supabase, jobId, 'validating', 90, logger);
-  const validation = validateQuality(optimization, settings.minWordCount, logger);
-text
-
-
-  if (!validation.valid) {
-    logger.warn('Quality issues', { issues: validation.issues });
+  await updateJob(supabase, jobId, 'validating', 90, logger);
+  const { score, issues } = validateQuality(result, settings.minWordCount, logger);
+  
+  if (issues.length > 0) {
+    logger.warn('Quality issues', { issues });
   }
 text
 
 
-  // Calculate scores
-  const qualityScore = calculateFinalScore(optimization, settings.minWordCount);
-  optimization.qualityScore = qualityScore;
-  optimization.contentStrategy = optimization.contentStrategy || {
-    wordCount: optimization.optimizedContent?.split(/\s+/).filter(Boolean).length || 0,
-    readabilityScore: 70,
-    keywordDensity: 0,
-    lsiKeywords: [],
-  };
-text
-
-
   // Step 8: Save
-  await updateJobProgress(supabase, jobId, 'saving', 95, logger);
+  await updateJob(supabase, jobId, 'saving', 95, logger);
+  
+  const wordCount = ((result.optimizedContent as string) || '').split(/\s+/).filter(Boolean).length;
 text
 
 
@@ -1113,8 +681,7 @@ text
     status: 'completed',
     progress: 100,
     current_step: 'completed',
-    result: optimization,
-    ai_tokens_used: tokensUsed,
+    result,
     completed_at: new Date().toISOString(),
   }).eq('id', jobId);
 text
@@ -1122,15 +689,8 @@ text
 
   await supabase.from('pages').update({
     status: 'completed',
-    score_after: {
-      overall: qualityScore,
-      components: {
-        contentDepth: optimization.readabilityScore || 75,
-        seoOnPage: optimization.seoScore || 80,
-        engagement: optimization.engagementScore || 70,
-      },
-    },
-    word_count: optimization.contentStrategy.wordCount,
+    score_after: { overall: score },
+    word_count: wordCount,
     updated_at: new Date().toISOString(),
   }).eq('id', pageId);
 text
@@ -1140,35 +700,26 @@ text
     page_id: pageId,
     job_id: jobId,
     type: 'success',
-    message: `Optimized: Score ${qualityScore}, ${optimization.contentStrategy.wordCount} words`,
+    message: `Optimized: Score ${score}, ${wordCount} words`,
   });
 text
 
 
-  logger.info('Complete!', { qualityScore, wordCount: optimization.contentStrategy.wordCount });
+  logger.info('Complete!', { score, wordCount });
 text
 
 
-  return new Response(
-    JSON.stringify({
-      success: true,
-      message: 'Optimization completed',
-      jobId,
-      optimization,
-    }),
-    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+  return new Response(JSON.stringify({ success: true, jobId, optimization: result }), {
+    status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
 text
 
 
 } catch (error) {
-  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-  logger.error('Failed', { error: errorMessage });
-  await markJobFailed(supabase, jobId, pageId, errorMessage, logger);
-  
-  return new Response(
-    JSON.stringify({ success: false, error: errorMessage, jobId }),
-    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+  const msg = error instanceof Error ? error.message : 'Unknown error';
+  await failJob(supabase, jobId, pageId, msg, logger);
+  return new Response(JSON.stringify({ success: false, error: msg, jobId }), {
+    status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
 }
-} catch (error) { logger.error('Request error', { error: error instanceof Error ? error.message : 'Unknown' }); return new Response( JSON.stringify({ success: false, error: error instanceof Error ? error.message : 'Unknown' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } } ); } });
+} catch (error) { logger.error('Fatal error', { error: error instanceof Error ? error.message : 'Unknown' }); return new Response(JSON.stringify({ success: false, error: 'Server error' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }); } });
