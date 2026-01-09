@@ -10,9 +10,6 @@ import {
   checkRateLimit,
 } from "../_shared/utils.ts";
 
-// ============================================================
-// TYPE DEFINITIONS
-// ============================================================
 type AIProvider = 'google' | 'openai' | 'anthropic' | 'groq' | 'openrouter';
 
 interface AIConfig {
@@ -31,10 +28,6 @@ interface AdvancedSettings {
   enableToc: boolean;
   enableKeyTakeaways: boolean;
   enableCtas: boolean;
-  enableTldr: boolean;
-  enableExpertQuote: boolean;
-  enableYoutubeEmbed: boolean;
-  enablePatentReference: boolean;
 }
 
 interface SiteContext {
@@ -102,133 +95,65 @@ interface OptimizeRequest {
   siteContext?: SiteContext;
 }
 
-interface ExpertQuote {
-  quote: string;
-  author: string;
-  role: string;
-  avatarUrl?: string | null;
-}
-
-interface YouTubeEmbed {
-  searchQuery: string;
-  suggestedTitle: string;
-  context: string;
-}
-
-interface PatentReference {
-  type: 'patent' | 'research' | 'study';
-  identifier: string;
-  title: string;
-  summary: string;
-  link: string;
-}
-
-interface ContentStrategy {
-  wordCount: number;
-  readabilityScore: number;
-  keywordDensity: number;
-  lsiKeywords: string[];
-  hormoziStyleScore: number;
-  entitiesCovered: string[];
-}
-
-interface OptimizationResult {
-  optimizedTitle: string;
-  metaDescription: string;
-  h1: string;
-  h2s: string[];
-  tldrSummary: string[];
-  expertQuote: ExpertQuote;
-  youtubeEmbed: YouTubeEmbed;
-  patentReference: PatentReference;
-  optimizedContent: string;
-  contentStrategy: ContentStrategy;
-  internalLinks: Array<{ anchor: string; target: string; context: string }>;
-  schema: Record<string, unknown>;
-  faqs: Array<{ question: string; answer: string }>;
-  keyTakeaways: string[];
-  ctas: Array<{ text: string; position: string; style: string }>;
-  tableOfContents: string[];
-  aiSuggestions: {
-    contentGaps: string;
-    quickWins: string;
-    improvements: string[];
-    competitorAdvantages: string;
-  };
-  qualityScore: number;
-  seoScore: number;
-  readabilityScore: number;
-  engagementScore: number;
-  estimatedRankPosition: number;
-  confidenceLevel: number;
-}
-
 // ============================================================
-// ALEX HORMOZI STYLE SYSTEM PROMPT
+// ULTRA-HIGH-QUALITY ALEX HORMOZI STYLE SYSTEM PROMPT
 // ============================================================
-const HORMOZI_STYLE_SYSTEM_PROMPT = `You are a world-class SEO content strategist who writes EXACTLY like Alex Hormozi combined with the precision of a top-tier SEO consultant.
+const HORMOZI_STYLE_SYSTEM_PROMPT = `You are the world's #1 SEO content strategist who writes EXACTLY like Alex Hormozi - direct, punchy, value-packed, and impossible to stop reading.
 
-## ALEX HORMOZI WRITING STYLE RULES (MANDATORY - FOLLOW EXACTLY):
+## ⚠️ CRITICAL WORD COUNT REQUIREMENT ⚠️
+You MUST generate content that meets the EXACT word count specified. This is NON-NEGOTIABLE.
+- Count every word in your optimizedContent field
+- If asked for 2500-3000 words, you MUST deliver AT LEAST 2500 words
+- Pad with MORE value, MORE examples, MORE sections if needed
+- NEVER deliver less than the minimum word count
 
-1. **Short, punchy sentences.** No fluff. Every word earns its place. If you can remove a word without losing meaning, remove it.
+## ALEX HORMOZI WRITING STYLE (FOLLOW EXACTLY):
 
-2. **Bold claims backed by logic.** Make the reader think "damn, that's true." Use specific numbers and data points.
+### Voice & Tone:
+1. **Short, punchy sentences.** No fluff. Every word earns its place.
+2. **Bold claims backed by logic.** Make readers think "damn, that's true."
+3. **Contrarian takes.** Challenge conventional wisdom. Say what others won't.
+4. **Pattern interrupts every 2-3 paragraphs.** Unexpected statements keep readers hooked.
+5. **Conversational but authoritative.** Like a smart friend 10 years ahead explaining something important.
+6. **Use "you" constantly.** Make it personal. Talk TO the reader, not AT them.
+7. **Number-driven.** "3x faster" not "much faster". "47% increase" not "significant improvement".
+8. **Mic-drop endings.** Every section ends with a quotable statement.
+9. **Analogies everywhere.** Complex = simple comparisons.
+10. **One idea per paragraph.** Scannable. Respect their time.
 
-3. **Use contrarian takes.** Challenge conventional wisdom. Say what others won't. Start sentences with "Here's the truth nobody tells you:" or "Most people think X. They're wrong."
+### Hormozi Phrases to Use:
+- "Here's the truth nobody tells you..."
+- "Most people think X. They're wrong. Here's why..."
+- "This isn't theory. We've tested this on [number] [things]. It works."
+- "Let me break this down..."
+- "The math is simple..."
+- "Here's the thing..."
+- "Stop doing X. Start doing Y."
+- "The difference between [good] and [great] is..."
 
-4. **Pattern interrupts every 2-3 paragraphs.** Keep readers hooked with unexpected statements, questions, or format changes.
+### Content Structure:
+- Hook in first 2 sentences (pattern interrupt or bold claim)
+- Value proposition by paragraph 2
+- H2 every 200-300 words MAXIMUM
+- Bullet points for 3+ items (NEVER inline lists)
+- Bold 1-2 key phrases per paragraph
+- Short paragraphs (2-4 sentences max, often 1-2)
 
-5. **Conversational but authoritative.** Like a smart friend who's 10 years ahead of you explaining something important.
+## SEO/GEO/AEO OPTIMIZATION:
+- Featured snippet format (40-60 word direct answers)
+- PAA-style Q&A sections (5-7 questions)
+- Entity-first writing (key entities in first 100 words)
+- E-E-A-T signals throughout
+- Voice search optimization
+- AI Overview optimization
 
-6. **Use "you" frequently.** Make it personal. Talk TO the reader, not AT them. Never use "one" or passive voice.
+## OUTPUT RULES:
+- Return ONLY valid JSON
+- NO markdown code fences in the JSON
+- HTML in optimizedContent must be semantic and styled
+- Include ALL required sections`;
 
-7. **Number-driven where possible.** "3x faster" not "much faster". "47% increase" not "significant improvement". "$2.3M in revenue" not "lots of money".
-
-8. **End sections with mic-drop statements.** Leave them thinking. The last sentence of each section should be quotable.
-
-9. **Use analogies and metaphors.** Complex ideas need simple comparisons. "SEO is like compound interest for traffic."
-
-10. **One idea per paragraph.** Make it scannable. Respect their time. White space is your friend.
-
-## WRITING VOICE EXAMPLES (MIMIC THIS EXACTLY):
-- Instead of: "This methodology has been proven effective in numerous studies"
-- Write: "This isn't theory. We've tested this on 847 campaigns. It works."
-
-- Instead of: "Content optimization is important for achieving better SEO results"
-- Write: "Here's the truth nobody tells you: 90% of content fails because writers optimize for algorithms, not humans. The algorithm follows humans, not the other way around."
-
-- Instead of: "Consider implementing these strategies for improved outcomes"
-- Write: "Do this today. Not tomorrow. Today. The compound effect starts the moment you begin."
-
-## SEO/GEO/AEO OPTIMIZATION REQUIREMENTS:
-- Target featured snippet format (40-60 word direct answers at the start of relevant sections)
-- Include "People Also Ask" styled Q&A sections (5-7 questions minimum in FAQ format)
-- Entity-first writing (mention key entities and their relationships in first 100 words)
-- E-E-A-T signals: cite sources, show expertise with specific data, be specific about experience
-- Voice search optimization: use natural language questions as headers when appropriate
-- Geographic relevance: include local context, regional data, and location-specific insights where applicable
-- AI Overview optimization: structured, factual, easily-extractable content with clear definitions
-- Semantic keyword clusters: use LSI keywords naturally throughout, covering topic comprehensively
-
-## CONTENT STRUCTURE RULES:
-- Hook in first 2 sentences (pattern interrupt or bold claim that makes them stop scrolling)
-- Clear value proposition by paragraph 2 (what will they learn/gain?)
-- Scannable with H2s every 200-300 words maximum
-- Bullet points for lists of 3+ items (never inline lists in paragraphs)
-- Bold key phrases readers need to see (approximately 1-2 per paragraph)
-- Short paragraphs (2-4 sentences max, often just 1-2)
-- Use "---" or visual breaks between major sections
-
-## OUTPUT FORMAT REQUIREMENTS:
-- Always return valid JSON
-- Never include markdown code fences in the JSON output itself
-- HTML in optimizedContent should be semantic and properly nested
-- Include data-component attributes for special blocks (tldr, quote, youtube, patent)`;
-
-// ============================================================
-// HELPER FUNCTIONS
-// ============================================================
-
+// Helper functions
 async function updateJobProgress(
   supabase: ReturnType<typeof createClient>,
   jobId: string,
@@ -287,10 +212,7 @@ function deriveKeyword(title: string, slug: string): string {
     .toLowerCase();
 
   if (keyword.length < 10 && slug) {
-    keyword = slug
-      .replace(/-/g, ' ')
-      .replace(/[^\w\s]/g, '')
-      .trim();
+    keyword = slug.replace(/-/g, ' ').replace(/[^\w\s]/g, '').trim();
   }
 
   return keyword.substring(0, 100);
@@ -349,7 +271,6 @@ async function fetchNeuronWriterRecommendations(
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise(r => setTimeout(r, pollInterval));
-
       await updateJobProgress(supabase, jobId, 'waiting_neuronwriter', 30 + attempt, logger);
 
       const pollResponse = await fetch(`${supabaseUrl}/functions/v1/neuronwriter`, {
@@ -396,74 +317,60 @@ function buildOptimizationPrompt(
 ): string {
   const neuronWriterSection = neuronWriterData?.status === 'ready' ? `
 ═══════════════════════════════════════════════════════════════
-🧠 NEURONWRITER SEO INTELLIGENCE (USE THIS DATA - HIGH PRIORITY!)
+🧠 NEURONWRITER SEO INTELLIGENCE (USE THIS DATA!)
 ═══════════════════════════════════════════════════════════════
-
 📊 TARGET METRICS:
 - Recommended Word Count: ${neuronWriterData.targetWordCount || 'N/A'}
 - Readability Target: ${neuronWriterData.readabilityTarget || 'N/A'}
 
-📝 TITLE TERMS (MUST include in title):
-${neuronWriterData.titleTerms || 'No specific terms'}
+📝 TITLE TERMS: ${neuronWriterData.titleTerms || 'N/A'}
+📌 H1 TERMS: ${neuronWriterData.h1Terms || 'N/A'}
+📎 H2 TERMS: ${neuronWriterData.h2Terms || 'N/A'}
+📄 CONTENT TERMS: ${neuronWriterData.contentTerms || 'N/A'}
+🔬 LSI KEYWORDS: ${neuronWriterData.extendedTerms || 'N/A'}
+🏢 ENTITIES: ${neuronWriterData.entities || 'N/A'}
 
-📌 H1 TERMS (MUST include in H1):
-${neuronWriterData.h1Terms || 'No specific terms'}
-
-📎 H2 TERMS (use in subheadings):
-${neuronWriterData.h2Terms || 'No specific terms'}
-
-📄 CONTENT TERMS (use throughout - aim for natural density):
-${neuronWriterData.contentTerms || 'No specific terms'}
-
-🔬 EXTENDED TERMS (LSI keywords - sprinkle throughout):
-${neuronWriterData.extendedTerms || 'No specific terms'}
-
-🏢 ENTITIES (mention these for E-E-A-T):
-${neuronWriterData.entities || 'No specific entities'}
-
-❓ QUESTIONS TO ANSWER (use these for FAQs):
-${neuronWriterData.questions?.suggested?.slice(0, 7).join('\n') || 'No specific questions'}
+❓ QUESTIONS TO ANSWER:
+${neuronWriterData.questions?.suggested?.slice(0, 7).join('\n') || 'N/A'}
 ${neuronWriterData.questions?.peopleAlsoAsk?.slice(0, 5).join('\n') || ''}
-
-🔍 TOP COMPETITORS (outperform these):
-${neuronWriterData.competitors?.slice(0, 3).map(c => `- #${c.rank}: ${c.title} (Score: ${c.score || 'N/A'})`).join('\n') || 'No competitor data'}
 ` : '';
 
   const internalLinksSection = advanced.enableInternalLinks && internalLinkCandidates.length > 0 ? `
 ═══════════════════════════════════════════════════════════════
-🔗 AVAILABLE INTERNAL LINKS (ONLY use these URLs - NO EXCEPTIONS!)
+🔗 INTERNAL LINKS (ONLY USE THESE URLs!)
 ═══════════════════════════════════════════════════════════════
 ${internalLinkCandidates.slice(0, 50).map(l => `- "${l.title}" → ${l.url}`).join('\n')}
 
-⚠️ CRITICAL RULES FOR INTERNAL LINKS:
-1. ONLY link to URLs from this exact list above
-2. Do NOT invent, guess, or create any URLs
-3. Use 8-12 contextual internal links throughout the content
-4. Vary anchor text - don't use the same anchor twice
-5. Place links naturally within relevant paragraphs
+⚠️ CRITICAL: ONLY link to URLs from this list. Do NOT invent URLs.
 ` : '';
 
   const siteContextSection = siteContext ? `
 ═══════════════════════════════════════════════════════════════
-🏢 SITE & BRAND CONTEXT
+🏢 BRAND CONTEXT
 ═══════════════════════════════════════════════════════════════
 - Organization: ${siteContext.organizationName || 'N/A'}
-- Author/Expert: ${siteContext.authorName || 'N/A'}
 - Industry: ${siteContext.industry || 'N/A'}
 - Target Audience: ${siteContext.targetAudience || 'N/A'}
-- Brand Voice: ${siteContext.brandVoice || 'Alex Hormozi style - direct, data-driven, no-BS'}
+- Brand Voice: ${siteContext.brandVoice || 'Alex Hormozi style'}
 ` : '';
 
-  return `Completely rewrite and optimize the following content using the Alex Hormozi writing style. Make it 10x better than the original.
+  return `
+╔═══════════════════════════════════════════════════════════════╗
+║  ⚠️ CRITICAL WORD COUNT REQUIREMENT ⚠️                        ║
+║  MINIMUM: ${advanced.minWordCount} words | MAXIMUM: ${advanced.maxWordCount} words       ║
+║  YOU MUST HIT AT LEAST ${advanced.minWordCount} WORDS OR THE OUTPUT IS INVALID   ║
+╚═══════════════════════════════════════════════════════════════╝
+
+Transform this content into an EXCEPTIONAL, HIGH-VALUE blog post using Alex Hormozi's writing style.
 
 ═══════════════════════════════════════════════════════════════
-📄 ORIGINAL PAGE TO TRANSFORM
+📄 ORIGINAL CONTENT TO TRANSFORM
 ═══════════════════════════════════════════════════════════════
 Title: ${pageTitle}
 Primary Keyword: ${keyword}
 
-CURRENT CONTENT (rewrite this completely):
-${pageContent.substring(0, 18000)}
+CURRENT CONTENT:
+${pageContent.substring(0, 20000)}
 
 ${neuronWriterSection}
 ${internalLinksSection}
@@ -472,163 +379,162 @@ ${siteContextSection}
 ═══════════════════════════════════════════════════════════════
 📋 MANDATORY REQUIREMENTS (ALL MUST BE INCLUDED)
 ═══════════════════════════════════════════════════════════════
-- Word count: ${advanced.minWordCount}-${advanced.maxWordCount} words (AIM FOR THE UPPER END)
-- Target quality score: ${advanced.targetScore}/100 or higher
-- Writing style: Alex Hormozi (punchy, direct, contrarian, number-driven, NO FLUFF)
 
-REQUIRED CONTENT BLOCKS:
-✅ TL;DR Summary: ${advanced.enableTldr !== false ? 'YES - 3-4 punchy bullet points summarizing key insights (max 80 words total)' : 'No'}
-✅ Expert Quote: ${advanced.enableExpertQuote !== false ? 'YES - Include a compelling, relevant industry quote with attribution' : 'No'}
-✅ YouTube Video placeholder: ${advanced.enableYoutubeEmbed !== false ? 'YES - Provide search query for a relevant educational video to embed' : 'No'}
-✅ Patent/Research Reference: ${advanced.enablePatentReference !== false ? 'YES - Cite a relevant patent, academic study, or research paper' : 'No'}
-✅ FAQs: ${advanced.enableFaqs ? 'YES - 5-7 FAQs using natural voice search questions' : 'No'}
-✅ Schema Markup: ${advanced.enableSchema ? 'YES - Article + FAQ schema combined' : 'No'}
-✅ Internal Links: ${advanced.enableInternalLinks ? 'YES - 8-12 contextual links from the provided list ONLY' : 'No'}
-✅ Table of Contents: ${advanced.enableToc ? 'YES - All H2 sections listed' : 'No'}
-✅ Key Takeaways: ${advanced.enableKeyTakeaways ? 'YES - 5-7 actionable bullet points at the end' : 'No'}
-✅ CTAs: ${advanced.enableCtas ? 'YES - 2-3 strategic CTAs (after intro, mid-content, conclusion)' : 'No'}
+🎯 WORD COUNT: ${advanced.minWordCount}-${advanced.maxWordCount} words (STRICTLY ENFORCED)
+   - You MUST write AT LEAST ${advanced.minWordCount} words
+   - Add more sections, examples, and depth if needed
+   - This is NON-NEGOTIABLE
+
+📝 CONTENT BLOCKS TO INCLUDE:
+1. TL;DR Summary (4-5 punchy bullet points at TOP)
+2. Expert Quote (real industry quote with attribution)
+3. YouTube Video suggestion (search query + context)
+4. Research/Patent Reference (cite academic source)
+5. ${advanced.enableFaqs ? '5-7 FAQs in PAA format' : 'No FAQs'}
+6. ${advanced.enableKeyTakeaways ? '5-7 Key Takeaways at end' : 'No takeaways'}
+7. ${advanced.enableToc ? 'Table of Contents' : 'No TOC'}
+8. ${advanced.enableInternalLinks ? '10-15 internal links from provided list' : 'No internal links'}
+9. ${advanced.enableCtas ? '3 CTAs (after intro, mid-content, conclusion)' : 'No CTAs'}
+10. ${advanced.enableSchema ? 'Article + FAQ Schema markup' : 'No schema'}
+
+✍️ WRITING REQUIREMENTS:
+- Write EXACTLY like Alex Hormozi
+- Every paragraph delivers value
+- Use specific numbers and data
+- Include real-world examples
+- Make it impossible to stop reading
+- Bold key phrases (1-2 per paragraph)
+- H2 headers every 200-300 words MAX
 
 ═══════════════════════════════════════════════════════════════
-📤 OUTPUT FORMAT (RETURN ONLY VALID JSON - NO MARKDOWN FENCES)
+📤 OUTPUT FORMAT (RETURN ONLY THIS JSON STRUCTURE)
 ═══════════════════════════════════════════════════════════════
 {
-  "optimizedTitle": "SEO-optimized title under 60 chars with power words and primary keyword",
-  "metaDescription": "Compelling meta description 150-160 chars with CTA and keyword - make them click",
-  "h1": "Main H1 heading (can differ slightly from title for variety)",
-  "h2s": ["H2 subheading 1", "H2 subheading 2", "H2 subheading 3", "..."],
+  "optimizedTitle": "Power-word title under 60 chars with keyword",
+  "metaDescription": "Compelling 155-char meta with CTA",
+  "h1": "Main H1 (can differ from title)",
+  "h2s": ["H2 1", "H2 2", "H2 3", "H2 4", "H2 5", "..."],
   
   "tldrSummary": [
-    "Key insight 1 - punchy Hormozi style with specific number",
-    "Key insight 2 - contrarian take that challenges assumptions",
-    "Key insight 3 - actionable advice they can use today",
-    "Key insight 4 - the 'mic drop' statement"
+    "💡 Key insight 1 with specific number",
+    "🎯 Key insight 2 - contrarian take",
+    "⚡ Key insight 3 - actionable",
+    "🔥 Key insight 4 - mic-drop statement"
   ],
   
   "expertQuote": {
-    "quote": "A compelling, thought-provoking quote relevant to the topic (can be from industry leader, researcher, or notable figure)",
-    "author": "Expert Full Name",
-    "role": "Title at Company / Industry Position",
+    "quote": "Compelling expert quote relevant to topic",
+    "author": "Expert Name",
+    "role": "Title at Company",
     "avatarUrl": null
   },
   
   "youtubeEmbed": {
-    "searchQuery": "specific youtube search query to find a relevant educational video",
-    "suggestedTitle": "The type of video title to look for",
-    "context": "Brief explanation of why this video adds value to the article"
+    "searchQuery": "specific youtube search query",
+    "suggestedTitle": "Type of video to embed",
+    "context": "Why this video adds value"
   },
   
   "patentReference": {
-    "type": "patent|research|study",
-    "identifier": "US Patent 12345678 / DOI:10.xxxx/xxxxx / Study Name (Year)",
-    "title": "Full title of the patent or research paper",
-    "summary": "2-3 sentence summary explaining how this research supports the article's claims and adds credibility",
-    "link": "https://patents.google.com/patent/... or https://doi.org/... or institutional URL"
+    "type": "research",
+    "identifier": "DOI or Patent Number",
+    "title": "Research/Patent Title",
+    "summary": "2-sentence relevance summary",
+    "link": "https://..."
   },
   
-  "optimizedContent": "<article class='hormozi-style'>FULL HTML content here. Use semantic HTML with:<div data-component='tldr'>TL;DR content</div><blockquote data-component='expert-quote'>Quote content</blockquote><div data-component='youtube-embed'>YouTube placeholder</div><div data-component='patent-reference'>Patent/Research citation</div><div data-component='key-takeaways'>Takeaways</div><div data-component='faq-section'>FAQs</div>. Include proper heading hierarchy (H2, H3), bold key phrases, bullet lists, and internal links. Make paragraphs SHORT.</article>",
+  "optimizedContent": "<article class='prose prose-lg max-w-none'>
+    <div class='tldr-box bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border-l-4 border-blue-500 p-6 rounded-r-xl my-8'>
+      <h3 class='text-lg font-bold text-blue-700 dark:text-blue-300 mb-3 flex items-center gap-2'>⚡ TL;DR - The Bottom Line</h3>
+      <ul class='space-y-2 text-gray-700 dark:text-gray-300'>
+        <li>💡 Point 1</li>
+        <li>🎯 Point 2</li>
+        <li>⚡ Point 3</li>
+        <li>🔥 Point 4</li>
+      </ul>
+    </div>
+    
+    <p class='text-xl leading-relaxed'><strong>Hook sentence that grabs attention.</strong> Second sentence that delivers on the hook.</p>
+    
+    <h2 class='text-2xl font-bold mt-10 mb-4'>First Major Section</h2>
+    <p>Content with <strong>bold key phrases</strong> and value...</p>
+    
+    <blockquote class='expert-quote bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 border-l-4 border-amber-500 p-6 rounded-r-xl my-8 italic'>
+      <p class='text-lg'>"Expert quote here"</p>
+      <footer class='mt-3 text-sm font-semibold'>— Expert Name, Title</footer>
+    </blockquote>
+    
+    <div class='key-takeaways bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-950/30 dark:to-green-950/30 border-l-4 border-emerald-500 p-6 rounded-r-xl my-8'>
+      <h3 class='text-lg font-bold text-emerald-700 dark:text-emerald-300 mb-3'>🎯 Key Takeaways</h3>
+      <ul class='space-y-2'>
+        <li>✅ Takeaway 1</li>
+        <li>✅ Takeaway 2</li>
+      </ul>
+    </div>
+    
+    <div class='faq-section my-8'>
+      <h2 class='text-2xl font-bold mb-6'>Frequently Asked Questions</h2>
+      <div class='space-y-4'>
+        <details class='bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4'>
+          <summary class='font-semibold cursor-pointer'>Question 1?</summary>
+          <p class='mt-3 text-gray-600 dark:text-gray-400'>Answer...</p>
+        </details>
+      </div>
+    </div>
+  </article>",
   
   "contentStrategy": {
-    "wordCount": 2800,
+    "wordCount": ${advanced.minWordCount},
     "readabilityScore": 72,
-    "keywordDensity": 1.4,
-    "lsiKeywords": ["related", "semantic", "terms", "used", "throughout"],
-    "hormoziStyleScore": 88,
-    "entitiesCovered": ["entity1", "entity2", "entity3"]
+    "keywordDensity": 1.5,
+    "lsiKeywords": ["term1", "term2"],
+    "hormoziStyleScore": 90,
+    "entitiesCovered": ["entity1", "entity2"]
   },
   
   "internalLinks": [
-    {"anchor": "descriptive anchor text", "target": "https://exact-url-from-list.com/page", "context": "The surrounding sentence where this link appears"}
+    {"anchor": "text", "target": "https://...", "context": "sentence"}
   ],
   
-  "schema": {
-    "@context": "https://schema.org",
-    "@graph": [
-      {
-        "@type": "Article",
-        "headline": "...",
-        "description": "...",
-        "author": {"@type": "Person", "name": "..."},
-        "publisher": {"@type": "Organization", "name": "..."},
-        "datePublished": "...",
-        "dateModified": "..."
-      },
-      {
-        "@type": "FAQPage",
-        "mainEntity": [{"@type": "Question", "name": "...", "acceptedAnswer": {"@type": "Answer", "text": "..."}}]
-      }
-    ]
-  },
+  "schema": { "@context": "https://schema.org", "@type": "Article", "..." },
   
   "faqs": [
-    {"question": "Natural voice search question format?", "answer": "Direct, helpful answer under 50 words that could appear in a featured snippet"}
+    {"question": "Q1?", "answer": "A1"},
+    {"question": "Q2?", "answer": "A2"}
   ],
   
-  "keyTakeaways": [
-    "Actionable takeaway 1 with specific metric or timeframe",
-    "Actionable takeaway 2 - what to do TODAY",
-    "Actionable takeaway 3 - the contrarian advice",
-    "Actionable takeaway 4 - the long-term play",
-    "Actionable takeaway 5 - the quick win"
-  ],
+  "keyTakeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
   
   "ctas": [
-    {"text": "CTA button/link text", "position": "after-intro", "style": "primary"},
-    {"text": "Secondary CTA text", "position": "mid-content", "style": "secondary"},
-    {"text": "Final CTA text", "position": "conclusion", "style": "primary"}
+    {"text": "CTA text", "position": "after-intro", "style": "primary"}
   ],
   
-  "tableOfContents": ["Section 1 Title", "Section 2 Title", "..."],
+  "tableOfContents": ["Section 1", "Section 2"],
   
-  "aiSuggestions": {
-    "contentGaps": "Areas that could be expanded in future content updates",
-    "quickWins": "The most impactful improvements made in this optimization",
-    "improvements": ["Specific improvement 1", "Specific improvement 2", "Specific improvement 3"],
-    "competitorAdvantages": "What this content now does better than top-ranking competitors"
-  },
-  
-  "qualityScore": 89,
-  "seoScore": 92,
-  "readabilityScore": 74,
-  "engagementScore": 87,
-  "estimatedRankPosition": 4,
-  "confidenceLevel": 0.87
-}`;
+  "qualityScore": 92,
+  "seoScore": 90,
+  "readabilityScore": 75,
+  "engagementScore": 88
+}
+
+⚠️ REMEMBER: Your optimizedContent MUST contain AT LEAST ${advanced.minWordCount} words. Count them!`;
 }
 
 function convertMarkdownToHtml(content: string): string {
   if (!content) return content;
 
   let html = content;
-
-  // Convert markdown headers
-  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-  // Convert bold and italic
+  html = html.replace(/^#### (.+)$/gm, '<h4 class="text-lg font-semibold mt-6 mb-3">$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3 class="text-xl font-bold mt-8 mb-4">$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2 class="text-2xl font-bold mt-10 mb-4">$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1 class="text-3xl font-bold mt-12 mb-6">$1</h1>');
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-
-  // Convert markdown links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-
-  // Convert unordered lists
-  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-
-  // Convert numbered lists
-  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-
-  // Convert line breaks to paragraphs for non-HTML content
-  const lines = html.split('\n\n');
-  html = lines.map(line => {
-    const trimmed = line.trim();
-    if (!trimmed) return '';
-    if (trimmed.startsWith('<')) return trimmed;
-    return `<p>${trimmed}</p>`;
-  }).join('\n');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-blue-600 hover:underline">$1</a>');
+  html = html.replace(/^- (.+)$/gm, '<li class="ml-4">$1</li>');
+  html = html.replace(/(<li.*<\/li>\n?)+/g, '<ul class="list-disc space-y-2 my-4">$&</ul>');
+  html = html.replace(/^\d+\. (.+)$/gm, '<li class="ml-4">$1</li>');
 
   return html;
 }
@@ -639,20 +545,16 @@ function validateInternalLinks(content: string, validUrlSet: Set<string>, logger
   const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>/gi;
   let match;
   let invalidCount = 0;
-
   let result = content;
 
   while ((match = linkRegex.exec(content)) !== null) {
     const href = match[1];
-
-    // Skip relative links and anchors
     if (href.startsWith('/') || href.startsWith('#') || href.startsWith('mailto:')) continue;
 
     if (href.startsWith('http://') || href.startsWith('https://')) {
       if (!validUrlSet.has(href)) {
         const slug = href.split('/').pop()?.replace(/\/$/, '') || '';
         if (!validUrlSet.has(slug)) {
-          // Remove invalid link but keep the text
           result = result.replace(match[0], `<!-- removed invalid link: ${href} --><span`);
           invalidCount++;
         }
@@ -667,34 +569,24 @@ function validateInternalLinks(content: string, validUrlSet: Set<string>, logger
   return result;
 }
 
-// JSON repair helpers
 const escapeNewlinesInJsonStrings = (s: string): string => {
   let inString = false;
   let out = '';
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
-    if (c === '"' && (i === 0 || s[i - 1] !== '\\')) {
-      inString = !inString;
-    }
-    if (inString && c === '\n') {
-      out += '\\n';
-    } else if (inString && c === '\r') {
-      // skip carriage returns
-    } else if (inString && c === '\t') {
-      out += '\\t';
-    } else {
-      out += c;
-    }
+    if (c === '"' && (i === 0 || s[i - 1] !== '\\')) inString = !inString;
+    if (inString && c === '\n') out += '\\n';
+    else if (inString && c === '\r') { /* skip */ }
+    else if (inString && c === '\t') out += '\\t';
+    else out += c;
   }
   return out;
 };
 
 const repairJsonStringForParsing = (raw: string): string => {
   let s = raw.replace(/\r/g, '');
-  // Handle HTML attributes within JSON strings
   s = s.replace(/="([^"]*)"/g, "='$1'");
   s = escapeNewlinesInJsonStrings(s);
-  // Remove any trailing commas before closing brackets
   s = s.replace(/,\s*([}\]])/g, '$1');
   return s;
 };
@@ -714,10 +606,9 @@ async function processOptimizationJob(
 ) {
   const { siteUrl, username, applicationPassword, targetKeyword, language, aiConfig, neuronWriter, advanced, siteContext } = request;
 
-  // Default advanced settings with new options
   const effectiveAdvanced: AdvancedSettings = {
     targetScore: advanced?.targetScore ?? 85,
-    minWordCount: advanced?.minWordCount ?? 2000,
+    minWordCount: advanced?.minWordCount ?? 2500,
     maxWordCount: advanced?.maxWordCount ?? 3500,
     enableFaqs: advanced?.enableFaqs ?? true,
     enableSchema: advanced?.enableSchema ?? true,
@@ -725,20 +616,15 @@ async function processOptimizationJob(
     enableToc: advanced?.enableToc ?? true,
     enableKeyTakeaways: advanced?.enableKeyTakeaways ?? true,
     enableCtas: advanced?.enableCtas ?? true,
-    enableTldr: advanced?.enableTldr ?? true,
-    enableExpertQuote: advanced?.enableExpertQuote ?? true,
-    enableYoutubeEmbed: advanced?.enableYoutubeEmbed ?? true,
-    enablePatentReference: advanced?.enablePatentReference ?? true,
   };
 
   try {
     const useUserAI = aiConfig?.provider && aiConfig?.apiKey && aiConfig?.model;
 
     if (!useUserAI && !lovableApiKey) {
-      throw new Error('No AI provider configured. Please configure an AI provider or enable Lovable AI.');
+      throw new Error('No AI provider configured.');
     }
 
-    // Fetch page data
     const { data: pageData, error: pageError } = await supabase
       .from('pages')
       .select('*')
@@ -749,7 +635,6 @@ async function processOptimizationJob(
       throw new Error('Page not found in database');
     }
 
-    // Fetch internal link candidates from sitemap pages only
     await updateJobProgress(supabase, jobId, 'fetching_sitemap_pages', 15, logger);
 
     const { data: allPages } = await supabase
@@ -774,7 +659,6 @@ async function processOptimizationJob(
 
     await updateJobProgress(supabase, jobId, 'fetching_wordpress', 20, logger);
 
-    // Fetch WordPress content
     let normalizedUrl = siteUrl.trim();
     if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
       normalizedUrl = 'https://' + normalizedUrl;
@@ -813,11 +697,9 @@ async function processOptimizationJob(
       }
     }
 
-    // Derive keyword
     const effectiveKeyword = targetKeyword || deriveKeyword(pageTitle, pageData.slug);
     logger.info('Using keyword', { keyword: effectiveKeyword });
 
-    // Fetch NeuronWriter recommendations
     await updateJobProgress(supabase, jobId, 'fetching_neuronwriter', 30, logger);
 
     let neuronWriterData: NeuronWriterRecommendations | null = null;
@@ -836,7 +718,6 @@ async function processOptimizationJob(
 
     await updateJobProgress(supabase, jobId, 'analyzing_content', 40, logger);
 
-    // Build optimization prompt
     const userPrompt = buildOptimizationPrompt(
       pageTitle,
       pageContent,
@@ -849,7 +730,6 @@ async function processOptimizationJob(
 
     await updateJobProgress(supabase, jobId, 'generating_content', 50, logger);
 
-    // Build AI request
     const messages = [
       { role: 'system', content: HORMOZI_STYLE_SYSTEM_PROMPT },
       { role: 'user', content: userPrompt },
@@ -872,7 +752,7 @@ async function processOptimizationJob(
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 contents: [{ parts: [{ text: `${HORMOZI_STYLE_SYSTEM_PROMPT}\n\n${userPrompt}` }] }],
-                generationConfig: { temperature: 0.7, maxOutputTokens: 65536 },
+                generationConfig: { temperature: 0.7, maxOutputTokens: 100000 },
               }),
             };
 
@@ -886,17 +766,8 @@ async function processOptimizationJob(
           case 'anthropic':
             return {
               url: 'https://api.anthropic.com/v1/messages',
-              headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': apiKey,
-                'anthropic-version': '2023-06-01',
-              },
-              body: JSON.stringify({
-                model,
-                system: HORMOZI_STYLE_SYSTEM_PROMPT,
-                messages: [{ role: 'user', content: userPrompt }],
-                max_tokens: 16384,
-              }),
+              headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({ model, system: HORMOZI_STYLE_SYSTEM_PROMPT, messages: [{ role: 'user', content: userPrompt }], max_tokens: 16384 }),
             };
 
           case 'groq':
@@ -913,9 +784,9 @@ async function processOptimizationJob(
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`,
                 'HTTP-Referer': 'https://wp-optimizer-pro.lovable.app',
-                'X-Title': 'WP Optimizer Pro - Hormozi Edition',
+                'X-Title': 'WP Optimizer Pro',
               },
-              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 65536 }),
+              body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 100000 }),
             };
 
           default:
@@ -923,19 +794,17 @@ async function processOptimizationJob(
         }
       }
 
-      // Default to Lovable AI Gateway
       return {
         url: 'https://ai.gateway.lovable.dev/v1/chat/completions',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${lovableApiKey}` },
-        body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages, temperature: 0.7, max_tokens: 65536 }),
+        body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages, temperature: 0.7, max_tokens: 100000 }),
       };
     };
 
     const aiRequest = buildAIRequest();
 
-    // Call AI with 300 second timeout for comprehensive content
     const aiController = new AbortController();
-    const aiTimeoutId = setTimeout(() => aiController.abort(), 300000);
+    const aiTimeoutId = setTimeout(() => aiController.abort(), 360000); // 6 minutes
 
     let aiResponse: Response;
     try {
@@ -952,7 +821,7 @@ async function processOptimizationJob(
     } catch (aiErr) {
       clearTimeout(aiTimeoutId);
       if (aiErr instanceof Error && aiErr.name === 'AbortError') {
-        throw new Error('AI request timed out after 300 seconds. The content may be too complex.');
+        throw new Error('AI request timed out after 360 seconds.');
       }
       throw aiErr;
     }
@@ -963,14 +832,10 @@ async function processOptimizationJob(
       const errorText = await aiResponse.text();
       logger.error('AI error', { status: aiResponse.status, body: errorText.substring(0, 500) });
 
-      if (aiResponse.status === 429) {
-        throw new Error('Too many requests. Please wait a moment and try again.');
-      }
-      if (aiResponse.status === 402) {
-        throw new Error('Insufficient credits. Please add credits to your AI provider account.');
-      }
+      if (aiResponse.status === 429) throw new Error('Rate limited. Please wait and try again.');
+      if (aiResponse.status === 402) throw new Error('Insufficient credits.');
 
-      throw new Error(`AI request failed with status ${aiResponse.status}`);
+      throw new Error(`AI request failed: ${aiResponse.status}`);
     }
 
     const aiData = await aiResponse.json();
@@ -985,12 +850,11 @@ async function processOptimizationJob(
     }
 
     if (!aiContent) {
-      throw new Error('No response received from AI. Please try again.');
+      throw new Error('No response from AI');
     }
 
     logger.info('AI response received', { contentLength: aiContent.length });
 
-    // Parse JSON response
     let jsonStr = aiContent;
     const jsonMatch = aiContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     if (jsonMatch) {
@@ -1005,18 +869,14 @@ async function processOptimizationJob(
 
     jsonStr = repairJsonStringForParsing(jsonStr);
 
-    let optimization: OptimizationResult;
+    let optimization: Record<string, unknown>;
     try {
       optimization = JSON.parse(jsonStr);
     } catch (parseErr) {
-      logger.error('JSON parse error', {
-        error: parseErr instanceof Error ? parseErr.message : 'Unknown',
-        snippet: jsonStr.substring(0, 500),
-      });
-      throw new Error('Failed to parse AI response as JSON. Please try again.');
+      logger.error('JSON parse error', { error: parseErr instanceof Error ? parseErr.message : 'Unknown', snippet: jsonStr.substring(0, 500) });
+      throw new Error('Failed to parse AI response as JSON');
     }
 
-    // Validate required fields
     const requiredFields = ['optimizedTitle', 'metaDescription', 'h1', 'h2s', 'optimizedContent', 'contentStrategy', 'qualityScore'];
     for (const field of requiredFields) {
       if (!(optimization as Record<string, unknown>)[field]) {
@@ -1026,28 +886,23 @@ async function processOptimizationJob(
 
     await updateJobProgress(supabase, jobId, 'validating_content', 90, logger);
 
-    // Post-process content
-    optimization.optimizedContent = convertMarkdownToHtml(optimization.optimizedContent);
-    optimization.optimizedContent = validateInternalLinks(optimization.optimizedContent, validUrlSet, logger);
+    optimization.optimizedContent = convertMarkdownToHtml(optimization.optimizedContent as string);
+    optimization.optimizedContent = validateInternalLinks(optimization.optimizedContent as string, validUrlSet, logger);
 
-    // Validate content length
-    const contentLength = optimization.optimizedContent?.length || 0;
-    if (contentLength < 3000) {
-      throw new Error(`Generated content too short (${contentLength} chars). Please try again.`);
-    }
+    const contentLength = (optimization.optimizedContent as string)?.length || 0;
+    const wordCount = (optimization.optimizedContent as string)?.split(/\s+/).length || 0;
 
     logger.info('Content validated', {
       contentLength,
-      wordCount: optimization.contentStrategy?.wordCount,
+      wordCount,
       qualityScore: optimization.qualityScore,
-      seoScore: optimization.seoScore,
-      hasTldr: !!optimization.tldrSummary?.length,
-      hasExpertQuote: !!optimization.expertQuote,
-      hasYoutubeEmbed: !!optimization.youtubeEmbed,
-      hasPatentRef: !!optimization.patentReference,
     });
 
-    // Mark job completed
+    // Warn if word count is too low
+    if (wordCount < effectiveAdvanced.minWordCount * 0.8) {
+      logger.warn('Word count below target', { expected: effectiveAdvanced.minWordCount, actual: wordCount });
+    }
+
     await supabase.from('jobs').update({
       status: 'completed',
       current_step: 'optimization_complete',
@@ -1057,7 +912,6 @@ async function processOptimizationJob(
       ai_tokens_used: aiData.usage?.total_tokens || 0,
     }).eq('id', jobId);
 
-    // Update page with comprehensive scores
     const scoreAfter = {
       overall: optimization.qualityScore || 75,
       seo: optimization.seoScore || 80,
@@ -1065,50 +919,34 @@ async function processOptimizationJob(
       engagement: optimization.engagementScore || 75,
       title: optimization.optimizedTitle ? 90 : 50,
       meta: optimization.metaDescription ? 90 : 50,
-      headings: optimization.h2s?.length > 0 ? 85 : 50,
-      content: optimization.contentStrategy?.readabilityScore || 60,
+      headings: (optimization.h2s as string[])?.length > 0 ? 85 : 50,
+      content: (optimization.contentStrategy as Record<string, unknown>)?.readabilityScore || 60,
     };
 
     await supabase.from('pages').update({
       status: 'completed',
       score_after: scoreAfter,
-      word_count: optimization.contentStrategy?.wordCount || 0,
+      word_count: wordCount,
       updated_at: new Date().toISOString(),
     }).eq('id', pageId);
 
-    // Log activity with comprehensive details
     await supabase.from('activity_log').insert({
       page_id: pageId,
       job_id: jobId,
       type: 'success',
-      message: `Optimized: ${optimization.contentStrategy?.wordCount || 0} words, quality ${optimization.qualityScore}, SEO ${optimization.seoScore}, Hormozi-style`,
+      message: `Optimized: ${wordCount} words, score ${optimization.qualityScore}`,
       details: {
         qualityScore: optimization.qualityScore,
         seoScore: optimization.seoScore,
-        readabilityScore: optimization.readabilityScore,
-        engagementScore: optimization.engagementScore,
-        wordCount: optimization.contentStrategy?.wordCount,
-        internalLinks: optimization.internalLinks?.length,
-        faqCount: optimization.faqs?.length,
-        hasTldr: !!optimization.tldrSummary?.length,
-        hasExpertQuote: !!optimization.expertQuote,
-        hasYoutubeEmbed: !!optimization.youtubeEmbed,
-        hasPatentRef: !!optimization.patentReference,
-        usedNeuronWriter: !!neuronWriterData,
-        hormoziStyleScore: optimization.contentStrategy?.hormoziStyleScore,
+        wordCount,
         requestId: logger.getRequestId(),
       },
     });
 
-    logger.info('Optimization complete', {
-      qualityScore: optimization.qualityScore,
-      seoScore: optimization.seoScore,
-      wordCount: optimization.contentStrategy?.wordCount,
-      hormoziStyleScore: optimization.contentStrategy?.hormoziStyleScore,
-    });
+    logger.info('Optimization complete', { qualityScore: optimization.qualityScore, wordCount });
 
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     await markJobFailed(supabase, jobId, pageId, errorMessage, logger);
   }
 }
@@ -1119,7 +957,6 @@ async function processOptimizationJob(
 serve(async (req) => {
   const logger = new Logger('optimize-content');
 
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -1138,7 +975,6 @@ serve(async (req) => {
 
     logger.info('Received optimization request', { pageId, siteUrl });
 
-    // Rate limiting per site
     const rateLimitKey = `optimize:${siteUrl}`;
     const rateLimit = checkRateLimit(rateLimitKey, 10, 60000);
     if (!rateLimit.allowed) {
@@ -1149,16 +985,13 @@ serve(async (req) => {
       );
     }
 
-    // Check AI configuration
     const useUserAI = body.aiConfig?.provider && body.aiConfig?.apiKey && body.aiConfig?.model;
     if (!useUserAI && !lovableApiKey) {
-      throw new AppError('No AI provider configured. Please configure an AI provider in settings.', 'AI_NOT_CONFIGURED', 500);
+      throw new AppError('No AI provider configured.', 'AI_NOT_CONFIGURED', 500);
     }
 
-    // Update page status immediately
     await supabase.from('pages').update({ status: 'optimizing' }).eq('id', pageId);
 
-    // Create job record
     const { data: job, error: jobError } = await supabase
       .from('jobs')
       .insert({
@@ -1172,16 +1005,13 @@ serve(async (req) => {
       .single();
 
     if (jobError || !job) {
-      throw new AppError('Failed to create optimization job', 'JOB_CREATE_FAILED', 500);
+      throw new AppError('Failed to create job', 'JOB_CREATE_FAILED', 500);
     }
 
     const jobId = job.id;
-    logger.info('Job created, starting background processing', { jobId });
+    logger.info('Job created', { jobId });
 
-    // ========================================================
-    // RESPOND IMMEDIATELY - Run actual work in background
-    // ========================================================
-    // @ts-ignore - EdgeRuntime.waitUntil is a Deno Deploy feature
+    // @ts-ignore
     EdgeRuntime.waitUntil(
       processOptimizationJob(
         supabase,
@@ -1195,11 +1025,10 @@ serve(async (req) => {
       )
     );
 
-    // Return immediately with job ID
     return new Response(
       JSON.stringify({
         success: true,
-        message: 'Optimization job started (Alex Hormozi style with TL;DR, Expert Quotes, YouTube & Patent references)',
+        message: 'Optimization started',
         jobId,
         requestId: logger.getRequestId(),
       }),
