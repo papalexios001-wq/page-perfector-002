@@ -3,6 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Check, AlertCircle, Zap, FileSearch, Brain, Shield, Upload, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { OptimizedContentRenderer } from '@/components/shared';
+
+// Then wherever you display the result:
+{job?.result && (
+  <OptimizedContentRenderer result={job.result} />
+)}
+
 
 export interface OptimizationStep {
   id: string;
