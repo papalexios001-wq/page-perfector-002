@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { progressManager } from '@/lib/pipeline/progress-manager';
-import { BLOG_POSTS } from '@/lib/blog/blog-posts';
+import { generateBlogPost } from '@/lib/ai/blogGenerator';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -69,16 +69,6 @@ async function optimizeContent(
   try {
     console.log(`[Pipeline] Starting optimization for ${jobId}`);
     
-    // Verify BLOG_POSTS is available
-    if (!BLOG_POSTS || BLOG_POSTS.length === 0) {
-      throw new Error('No blog posts available');
-    }
-    console.log(`[Pipeline] Blog posts available: ${BLOG_POSTS.length}`);
-    
-    // Stage 1
-    await progressManager.updateProgress(jobId, 'briefing', 'briefing', 15, 'Analyzing content...');
-    await sleep(150);
-    
     // Stage 2
     await progressManager.updateProgress(jobId, 'outlining', 'outlining', 30, 'Building structure...');
     await sleep(150);
@@ -99,39 +89,50 @@ async function optimizeContent(
     await progressManager.updateProgress(jobId, 'rendering', 'rendering', 90, 'Finalizing output...');
     await sleep(150);
     
-    // Select blog post
-    const postIndex = Math.min(
-      Math.floor(Math.random() * BLOG_POSTS.length),
-      BLOG_POSTS.length - 1
-    );
-    const selectedPost = BLOG_POSTS[postIndex];
+    // CRITICAL: Generate blog post using AI with styled components
+    console.log(`[Pipeline] Generating AI blog post for: ${postTitle}`);
     
-    if (!selectedPost) {
-      throw new Error(`Failed to select blog post at index ${postIndex}`);
+    let blogPost;
+    try {
+      // Call AI blog generator
+      blogPost = await generateBlogPost({
+        url,
+        title: postTitle,
+        keywords: [],
+        targetLength: 2000,
+      });
+      
+      console.log(`[AI] ✅ Generated blog with ${blogPost.sections.length} sections`);
+    } catch (aiError) {
+      console.error('[AI] Error generating blog post:', aiError);
+      throw new Error('AI generation failed: ' + (aiError instanceof Error ? aiError.message : String(aiError)));
     }
-    
-    console.log(`[Pipeline] Selected post: ${selectedPost.id}`);
-    
-    // Final update with metadata
+
+    if (!blogPost || !blogPost.sections || blogPost.sections.length === 0) {
+      throw new Error('Generated blog post has no sections');
+    }
+
+    console.log(`[Pipeline] Blog post ready: ${blogPost.title}`);
+
+    // Final update with AI-generated blog post metadata
     const result = {
       title: postTitle,
-      selectedPost: selectedPost.id,
-      postTitle: selectedPost.title,
-      excerpt: selectedPost.excerpt,
-      slug: selectedPost.slug,
-      author: selectedPost.author,
-      publishedAt: selectedPost.publishedAt?.toISOString() || new Date().toISOString(),
-      readTime: selectedPost.readTime,
-      category: selectedPost.category,
-      tags: selectedPost.tags,
+      blogPostId: blogPost.id,
+      blogTitle: blogPost.title,
+      excerpt: blogPost.excerpt,
+      readTime: blogPost.readTime,
+      author: blogPost.author,
+      publishedAt: blogPost.publishedAt.toISOString(),
+      category: blogPost.category,
+      tags: blogPost.tags,
+      sectionsCount: blogPost.sections.length,
+      sections: blogPost.sections, // CRITICAL: Pass sections to frontend
       hasComponents: true,
-      componentCount: 9,
+      componentCount: blogPost.sections.filter(s => ['tldr', 'takeaways', 'quote', 'cta', 'video', 'summary', 'table'].includes(s.type)).length,
       generatedAt: new Date().toISOString(),
       siteId,
       sourceUrl: url,
       executionTimeMs: Date.now() - startTime,
-    };
-    
     await progressManager.updateProgress(
       jobId,
       'rendering',
