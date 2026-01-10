@@ -99,8 +99,8 @@ async function optimizeContent(
         url,
         title: postTitle,
         keywords: [],
-        targetLength: 2000,
-      });
+        targetLength: 2000,,
+        apiKey: import.meta.env.VITE_GEMINI_API_KEY || ''      });
       
       console.log(`[AI] ✅ Generated blog with ${blogPost.sections.length} sections`);
     } catch (aiError) {
