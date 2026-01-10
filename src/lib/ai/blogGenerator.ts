@@ -7,8 +7,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { BlogPostContent, BlogSection } from '@/components/blog/BlogPostComponents';
 
 // Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || '');
-
+const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || '');
 export interface BlogGenerationRequest {
   url: string;
   title: string;
