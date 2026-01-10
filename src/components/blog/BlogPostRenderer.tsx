@@ -60,6 +60,7 @@ export default function BlogPostRenderer({ sections, title }: BlogPostRendererPr
             title={section.title || 'Take Action'}
             description={section.description || ''}
             buttonText={section.buttonText || 'Get Started'}
+                        buttonLink={section.buttonLink || section.url || '#'}
           />
         );
       
@@ -67,8 +68,7 @@ export default function BlogPostRenderer({ sections, title }: BlogPostRendererPr
         return (
           <VideoEmbedBox
             key={index}
-            url={section.url || ''}
-            title={section.title || 'Video'}
+            videoId={section.url || ''}            title={section.title || 'Video'}
           />
         );
       
