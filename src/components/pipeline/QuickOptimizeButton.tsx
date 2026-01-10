@@ -2,7 +2,13 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Zap, Loader2, Check, AlertCircle, Sparkles } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 import { BlogPostDisplay } from '../blog/BlogPostDisplay';
+
+// Initialize Supabase Client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 interface QuickOptimizeButtonProps {
   url: string;
@@ -20,7 +26,7 @@ interface JobStatus {
 
 /**
  * ENTERPRISE-GRADE Quick Optimize Button
- * Bulletproof optimization with stunning UI
+ * Bulletproof optimization with Supabase Edge Functions
  */
 export function QuickOptimizeButton({
   url,
@@ -34,62 +40,76 @@ export function QuickOptimizeButton({
   const [progress, setProgress] = useState(0);
   const [currentStep, setCurrentStep] = useState('Awaiting start...');
   const [blogPost, setBlogPost] = useState<any>(null);
-  
+
   const pollingActiveRef = useRef(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastStatusRef = useRef<JobStatus | null>(null);
 
-  // BULLETPROOF polling function
+  // Enterprise-grade polling function using Supabase
   const pollJobStatus = useCallback(async (currentJobId: string) => {
     if (!pollingActiveRef.current) return;
-    
+
     try {
-      const response = await fetch(`/api/optimize/status?jobId=${currentJobId}`);
-      
-      if (!response.ok) {
-        console.error('[Poll] Status fetch failed:', response.status);
+      // Invoke Supabase Edge Function to check job status
+      const { data, error: fnError } = await supabase.functions.invoke(
+        'optimize-status',
+        {
+          body: { jobId: currentJobId },
+        }
+      );
+
+      if (fnError) {
+        console.error('[Poll] Status check failed:', fnError);
         return;
       }
-      const data: JobStatus = await response.json();
-      lastStatusRef.current = data;
-      
-      console.log(`[Poll] Job ${currentJobId} state: ${data.state}, progress: ${data.progress}%`);
-      
+
+      const jobStatus: JobStatus = data;
+      lastStatusRef.current = jobStatus;
+
+      console.log(
+        `[Poll] Job ${currentJobId} state: ${jobStatus.state}, progress: ${jobStatus.progress}%`
+      );
+
       // Update UI with latest data
-      setProgress(data.progress);
-      setCurrentStep(data.currentStep || 'Processing...');
+      setProgress(jobStatus.progress);
+      setCurrentStep(jobStatus.currentStep || 'Processing...');
 
       // Check for completion
-      if (data.state === 'complete') {
-        console.log(`[Poll] Job completed! Finalizing...`);
+      if (jobStatus.state === 'complete') {
+        console.log('[Poll] Job completed! Finalizing...');
         pollingActiveRef.current = false;
-        
-        // Fetch blog post if available
-        if (data.metadata?.selectedPost) {
+
+        // Fetch optimized content if available
+        if (jobStatus.metadata?.contentId) {
           try {
-            const blogResponse = await fetch(`/api/blog?id=${data.metadata.selectedPost}`);
-            if (blogResponse.ok) {
-              const blogData = await blogResponse.json();
-              setBlogPost(blogData.post);
+            const { data: contentData, error: contentError } =
+              await supabase.functions.invoke('fetch-page-content', {
+                body: { contentId: jobStatus.metadata.contentId },
+              });
+
+            if (!contentError && contentData?.post) {
+              setBlogPost(contentData.post);
             }
           } catch (err) {
-            console.error('[Poll] Failed to fetch blog post:', err);
+            console.error('[Poll] Failed to fetch optimized content:', err);
           }
         }
-        
+
         setIsComplete(true);
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
         }
-        
+
         onJobComplete?.(currentJobId, blogPost);
-      } else if (data.state === 'failed') {
-        console.log(`[Poll] Job failed: ${data.metadata?.error}`);
+      } else if (jobStatus.state === 'failed') {
+        console.log(
+          `[Poll] Job failed: ${jobStatus.metadata?.error || 'Unknown error'}`
+        );
         pollingActiveRef.current = false;
         setError('Optimization failed');
         setIsComplete(true);
-        
+
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
@@ -104,23 +124,23 @@ export function QuickOptimizeButton({
   // Start polling when jobId changes
   useEffect(() => {
     if (!jobId) return;
-    
+
     console.log(`[Effect] Starting polling for job: ${jobId}`);
-    
+
     pollingActiveRef.current = true;
-    
+
     // Poll immediately
     pollJobStatus(jobId);
-    
+
     // Then set up interval - poll every 300ms for responsiveness
     pollIntervalRef.current = setInterval(() => {
       if (pollingActiveRef.current) {
         pollJobStatus(jobId);
       }
     }, 300);
-    
+
     return () => {
-      console.log(`[Effect] Cleanup: stopping polling`);
+      console.log('[Effect] Cleanup: stopping polling');
       pollingActiveRef.current = false;
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
@@ -137,27 +157,34 @@ export function QuickOptimizeButton({
       setProgress(0);
       setBlogPost(null);
       pollingActiveRef.current = false;
-      console.log('[Click] Starting optimization for URL:', url);
-      
-      const response = await fetch('/api/optimize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url,
-          siteId: 'default',
-          mode: 'optimize',
-          postTitle: 'Quick Optimized Blog Post',
-        }),
-      });
 
-      if (!response.ok) {
-        throw new Error(`Failed to start optimization: ${response.status}`);
+      console.log('[Click] Starting optimization for URL:', url);
+
+      // Invoke Supabase Edge Function to start optimization
+      const { data, error: fnError } = await supabase.functions.invoke(
+        'optimize-content',
+        {
+          body: {
+            url,
+            siteId: 'default',
+            mode: 'optimize',
+            postTitle: 'Quick Optimized Blog Post',
+          },
+        }
+      );
+
+      if (fnError) {
+        throw new Error(`Failed to start optimization: ${fnError.message}`);
       }
-      const result = await response.json();
-      const newJobId = result.jobId;
-      
+
+      const newJobId = data?.jobId;
+
+      if (!newJobId) {
+        throw new Error('No jobId returned from optimization service');
+      }
+
       console.log('[Click] Optimization started with jobId:', newJobId);
-      
+
       setJobId(newJobId);
       setIsLoading(false);
       onJobStart?.(newJobId);
@@ -211,7 +238,11 @@ export function QuickOptimizeButton({
           {state.icon}
           {state.label}
         </button>
-        {error && <span className="text-xs text-red-600 font-medium bg-red-50 px-3 py-1 rounded">{error}</span>}
+        {error && (
+          <span className="text-xs text-red-600 font-medium bg-red-50 px-3 py-1 rounded">
+            {error}
+          </span>
+        )}
       </div>
 
       {/* Enterprise Progress Bar */}
@@ -248,42 +279,56 @@ export function QuickOptimizeButton({
               <Check className="w-6 h-6 text-green-600" />
             </div>
             <div className="flex-1">
-              <h3 className="text-lg font-bold text-green-900 mb-1">Optimization Complete!</h3>
-              <p className="text-sm text-green-700">Your content has been enhanced with enterprise-grade optimization.</p>
+              <h3 className="text-lg font-bold text-green-900 mb-1">
+                Optimization Complete!
+              </h3>
+              <p className="text-sm text-green-700">
+                Your content has been enhanced with enterprise-grade optimization.
+              </p>
             </div>
           </div>
-          
+
           <div className="bg-white rounded-lg p-4 mt-3 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-green-50 p-3 rounded">
                 <p className="text-xs text-green-700 font-semibold">Title</p>
-                <p className="text-sm font-semibold text-gray-900 truncate">{blogPost.title}</p>
+                <p className="text-sm font-semibold text-gray-900 truncate">
+                  {blogPost.title}
+                </p>
               </div>
               <div className="bg-blue-50 p-3 rounded">
                 <p className="text-xs text-blue-700 font-semibold">Author</p>
-                <p className="text-sm font-semibold text-gray-900">{blogPost.author || 'AI'}</p>
+                <p className="text-sm font-semibold text-gray-900">
+                  {blogPost.author || 'AI'}
+                </p>
               </div>
               <div className="bg-purple-50 p-3 rounded">
                 <p className="text-xs text-purple-700 font-semibold">Components</p>
-                <p className="text-sm font-bold text-purple-900">{blogPost.componentCount || 9}</p>
+                <p className="text-sm font-bold text-purple-900">
+                  {blogPost.componentCount || 9}
+                </p>
               </div>
               <div className="bg-orange-50 p-3 rounded">
                 <p className="text-xs text-orange-700 font-semibold">Read Time</p>
-                <p className="text-sm font-semibold text-gray-900">{blogPost.readTime || '8'} min</p>
+                <p className="text-sm font-semibold text-gray-900">
+                  {blogPost.readTime || '8'} min
+                </p>
               </div>
             </div>
-            
+
             {blogPost.excerpt && (
               <div className="bg-gray-50 p-3 rounded border-l-4 border-green-500">
                 <p className="text-xs text-gray-600 font-semibold mb-1">Excerpt</p>
-                <p className="text-sm text-gray-800 line-clamp-2">{blogPost.excerpt}</p>
+                <p className="text-sm text-gray-800 line-clamp-2">
+                  {blogPost.excerpt}
+                </p>
               </div>
             )}
           </div>
         </div>
       )}
 
-            {/* Blog Post Display - SOTA HTML Rendering */}
+      {/* Blog Post Display - SOTA HTML Rendering */}
       {isComplete && blogPost && (
         <div className="mt-8 border-t-2 border-gray-200 pt-8">
           <BlogPostDisplay post={blogPost} isLoading={false} />
