@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BlogPostRenderer, BlogPostContent } from './BlogPostComponents';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { BlogPostContent } from './BlogPostComponents';import { Loader2, AlertCircle } from 'lucide-react';
+import BlogPostRenderer from './BlogPostRenderer';
 
 /**
  * BlogPostDisplay Component
