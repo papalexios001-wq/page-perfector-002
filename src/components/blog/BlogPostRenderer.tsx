@@ -17,6 +17,13 @@ interface BlogPostRendererProps {
   title: string;
 }
 
+// Helper function to extract YouTube video ID from URL
+const extractVideoId = (url: string): string => {
+  const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([^&?\s]+)/);
+  return match ? match[1] : url;
+};
+
+
 export default function BlogPostRenderer({ sections, title }: BlogPostRendererProps) {  const renderSection = (section: BlogSection, index: number) => {
     switch (section.type) {
       case 'tldr':
@@ -68,7 +75,7 @@ export default function BlogPostRenderer({ sections, title }: BlogPostRendererPr
         return (
           <VideoEmbedBox
             key={index}
-            videoId={section.url || ''}            title={section.title || 'Video'}
+            videoId={extractVideoId(section.url || '')}            title={section.title || 'Video'}
           />
         );
       
