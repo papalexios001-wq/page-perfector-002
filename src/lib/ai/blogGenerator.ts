@@ -7,9 +7,9 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { BlogPostContent, BlogSection } from '@/components/blog/BlogPostComponents';
 
 // Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || '');
-export interface BlogGenerationRequest {
+// Gemini AI will be initialized with API key passed from the API routeexport interface BlogGenerationRequest {
   url: string;
+  apiKey: string;
   title: string;
   keywords?: string[];
   targetLength?: number;
@@ -71,6 +71,8 @@ Return ONLY the JSON object. No additional text.
  */
 export async function generateBlogPost(request: BlogGenerationRequest): Promise<BlogPostContent> {
   try {
+        // Initialize Gemini AI with API key from request
+        const genAI = new GoogleGenerativeAI(request.apiKey);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
 
     const prompt = `${BLOG_GENERATION_PROMPT}\n\nTopic: ${request.title}\nURL: ${request.url}\nKeywords: ${request.keywords?.join(', ') || 'N/A'}\n\nGenerate the blog post JSON now:`;
