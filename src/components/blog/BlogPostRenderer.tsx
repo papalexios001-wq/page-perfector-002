@@ -17,8 +17,7 @@ interface BlogPostRendererProps {
   title: string;
 }
 
-export function BlogPostRenderer({ sections, title }: BlogPostRendererProps) {
-  const renderSection = (section: BlogSection, index: number) => {
+export default function BlogPostRenderer({ sections, title }: BlogPostRendererProps) {  const renderSection = (section: BlogSection, index: number) => {
     switch (section.type) {
       case 'tldr':
         return <TLDRBox key={index} content={section.content} />;
