@@ -2,8 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { BlogPostContent } from './BlogPostComponents';import { Loader2, AlertCircle } from 'lucide-react';
-import BlogPostRenderer from './BlogPostRenderer';
-
+import { BlogPostRenderer } from './BlogPostComponents';
 /**
  * BlogPostDisplay Component
  * Perfectly integrated with QuickOptimizeButton
