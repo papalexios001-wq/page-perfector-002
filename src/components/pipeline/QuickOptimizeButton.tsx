@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Zap, Loader2, Check, AlertCircle, Sparkles } from 'lucide-react';
+import { BlogPostDisplay } from '../blog/BlogPostDisplay';
 
 interface QuickOptimizeButtonProps {
   url: string;
@@ -279,6 +280,13 @@ export function QuickOptimizeButton({
               </div>
             )}
           </div>
+        </div>
+      )}
+
+            {/* Blog Post Display - SOTA HTML Rendering */}
+      {isComplete && blogPost && (
+        <div className="mt-8 border-t-2 border-gray-200 pt-8">
+          <BlogPostDisplay post={blogPost} isLoading={false} />
         </div>
       )}
     </div>
