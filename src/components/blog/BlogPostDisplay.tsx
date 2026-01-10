@@ -66,9 +66,11 @@ class BlogErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
 }
 
 /**
- * Validates and normalizes blog post data
+ * ENTERPRISE-GRADE: Validates and normalizes blog post data with comprehensive fallbacks
  */
 function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
+  console.log('[validateBlogPost] Input post:', JSON.stringify(post, null, 2));
+  
   if (!post || typeof post !== 'object') {
     console.error('[validateBlogPost] Invalid post: not an object', post);
     return null;
@@ -84,7 +86,9 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
   };
 
   // Validate and normalize sections
-  if (Array.isArray(post.sections)) {
+  if (Array.isArray(post.sections) && post.sections.length > 0) {
+    console.log(`[validateBlogPost] Processing ${post.sections.length} sections`);
+    
     normalized.sections = post.sections.map((section: any, index: number) => {
       if (!section || typeof section !== 'object') {
         console.warn(`[validateBlogPost] Section ${index} is invalid, skipping`);
@@ -100,10 +104,13 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
       switch (section.type) {
         case 'takeaways':
           normalizedSection.data = Array.isArray(section.data) ? section.data : [];
+          if (normalizedSection.data.length === 0) {
+            console.warn(`[validateBlogPost] Takeaways section ${index} has no data`);
+          }
           break;
         case 'quote':
           normalizedSection.data = {
-            text: section.data?.text || section.text || '',
+            text: section.data?.text || section.text || section.content || '',
             author: section.data?.author || section.author || '',
             source: section.data?.source || section.source || '',
           };
@@ -146,22 +153,73 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
 
       return normalizedSection;
     }).filter(Boolean);
+    
+    console.log(`[validateBlogPost] Normalized ${normalized.sections.length} valid sections`);
   } else {
-    console.warn('[validateBlogPost] No sections array, creating default');
-    normalized.sections = [
-      {
+    console.warn('[validateBlogPost] No sections array or empty, creating fallback');
+    
+    // CRITICAL FIX: Create fallback sections from legacy format
+    const fallbackSections: any[] = [];
+    
+    // Add TL;DR if available
+    if (post.tldrSummary && Array.isArray(post.tldrSummary) && post.tldrSummary.length > 0) {
+      fallbackSections.push({
+        type: 'tldr',
+        content: post.tldrSummary.join(' ')
+      });
+    }
+    
+    // Add takeaways if available
+    if (post.keyTakeaways && Array.isArray(post.keyTakeaways) && post.keyTakeaways.length > 0) {
+      fallbackSections.push({
+        type: 'takeaways',
+        data: post.keyTakeaways
+      });
+    }
+    
+    // Add main content
+    if (post.optimizedContent || post.content) {
+      fallbackSections.push({
         type: 'paragraph',
-        content: post.optimizedContent || post.content || 'No content available.',
-      },
-    ];
+        content: post.optimizedContent || post.content
+      });
+    }
+    
+    // Add quote if available
+    if (post.expertQuote && post.expertQuote.quote) {
+      fallbackSections.push({
+        type: 'quote',
+        data: {
+          text: post.expertQuote.quote,
+          author: post.expertQuote.author || '',
+          source: post.expertQuote.role || ''
+        }
+      });
+    }
+    
+    // If still no sections, create a minimal one
+    if (fallbackSections.length === 0) {
+      fallbackSections.push({
+        type: 'paragraph',
+        content: 'Blog post content is being processed. Please try optimizing again.'
+      });
+    }
+    
+    normalized.sections = fallbackSections;
+    console.log(`[validateBlogPost] Created ${normalized.sections.length} fallback sections`);
   }
 
-  console.log('[validateBlogPost] Normalized post:', normalized);
+  console.log('[validateBlogPost] Final normalized post:', {
+    title: normalized.title,
+    sectionsCount: normalized.sections.length,
+    sectionTypes: normalized.sections.map(s => s.type)
+  });
+  
   return normalized;
 }
 
 /**
- * BlogPostDisplay Component
+ * BlogPostDisplay Component - ENTERPRISE-GRADE with comprehensive error handling
  */
 export interface BlogPostDisplayProps {
   postId?: string;
@@ -245,10 +303,42 @@ export function BlogPostDisplay({ postId, post, isLoading, error, onRetry }: Blo
     );
   }
 
+  // CRITICAL SAFETY CHECK: Ensure sections exist
+  if (!displayPost.sections || displayPost.sections.length === 0) {
+    console.error('[BlogPostDisplay] Post has no sections!', displayPost);
+    return (
+      <div className="p-6 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="w-6 h-6 text-yellow-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <h3 className="font-bold text-yellow-900 mb-1">Content Structure Issue</h3>
+            <p className="text-sm text-yellow-800 mb-3">
+              The blog post was generated but has no displayable sections. 
+              This might be a temporary issue.
+            </p>
+            <p className="text-xs text-yellow-700 mb-3">
+              Title: {displayPost.title}
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="flex items-center gap-2 px-3 py-1.5 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Reload Page
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Render blog post with error boundary
   return (
     <BlogErrorBoundary
-      onError={(err) => console.error('[BlogPostDisplay] Render error:', err)}
+      onError={(err) => {
+        console.error('[BlogPostDisplay] Render error:', err);
+        console.error('[BlogPostDisplay] Post that caused error:', displayPost);
+      }}
     >
       <div className="bg-white rounded-lg shadow-lg overflow-hidden">
         <BlogPostRenderer post={displayPost} />
