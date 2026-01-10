@@ -73,13 +73,18 @@ export function QuickOptimizeButton({
 
       // Check for completion
       if (job.status === 'completed') {
-        console.log(`[Poll] Job completed! Finalizing...`);
-        pollingActiveRef.current = false;
-        
-        // Set blog post from job result
-        if (job.result) {
-          setBlogPost(job.result);
-        }
+  console.log(`[Poll] Job completed! Finalizing...`);
+  console.log('[Poll] Job result:', JSON.stringify(job.result, null, 2));
+  pollingActiveRef.current = false;
+  
+  // Set blog post from job result
+  if (job.result) {
+    console.log('[Poll] Setting blogPost state with result');
+    setBlogPost(job.result);
+  } else {
+    console.error('[Poll] No result in completed job!');
+  }
+
         
         setIsComplete(true);
         if (pollIntervalRef.current) {
