@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
-import { BlogPostRenderer, BlogPostContent } from './BlogPostComponents';
+import { BlogPostRenderer, BlogPostContent } from '../BlogPostComponents';
 
 /**
  * ERROR BOUNDARY - Catches rendering crashes
@@ -10,7 +10,7 @@ import { BlogPostRenderer, BlogPostContent } from './BlogPostComponents';
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
-  onError?: (error: Error) => void;
+  onerror?: (error: Error) => void;
 }
 
 interface ErrorBoundaryState {
@@ -31,7 +31,7 @@ class BlogErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('[BlogErrorBoundary] Caught error:', error);
     console.error('[BlogErrorBoundary] Error info:', errorInfo);
-    this.props.onError?.(error);
+    this.props.onerror?.(error);
   }
 
   render() {
@@ -108,6 +108,7 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
             console.warn(`[validateBlogPost] Takeaways section ${index} has no data`);
           }
           break;
+        
         case 'quote':
           normalizedSection.data = {
             text: section.data?.text || section.text || section.content || '',
@@ -115,6 +116,7 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
             source: section.data?.source || section.source || '',
           };
           break;
+        
         case 'cta':
           normalizedSection.data = {
             title: section.data?.title || section.title || 'Take Action',
@@ -123,12 +125,14 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
             buttonLink: section.data?.buttonLink || section.buttonLink || '#',
           };
           break;
+        
         case 'video':
           normalizedSection.data = {
             videoId: section.data?.videoId || section.videoId || '',
             title: section.data?.title || section.title || 'Video',
           };
           break;
+        
         case 'table':
           normalizedSection.data = {
             headers: Array.isArray(section.data?.headers) ? section.data.headers : [],
@@ -136,15 +140,18 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
             title: section.data?.title || section.title || '',
           };
           break;
+        
         case 'patent':
           normalizedSection.data = Array.isArray(section.data) ? section.data : [];
           break;
+        
         case 'chart':
           normalizedSection.data = {
             title: section.data?.title || section.title || 'Chart',
             description: section.data?.description || section.description || '',
           };
           break;
+        
         default:
           // For heading, paragraph, tldr, summary - just use content
           normalizedSection.content = section.content || '';
@@ -153,198 +160,92 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
 
       return normalizedSection;
     }).filter(Boolean);
-    
-    console.log(`[validateBlogPost] Normalized ${normalized.sections.length} valid sections`);
   } else {
-    console.warn('[validateBlogPost] No sections array or empty, creating fallback');
-    
-    // CRITICAL FIX: Create fallback sections from legacy format
-    const fallbackSections: any[] = [];
-    
-    // Add TL;DR if available
-    if (post.tldrSummary && Array.isArray(post.tldrSummary) && post.tldrSummary.length > 0) {
-      fallbackSections.push({
-        type: 'tldr',
-        content: post.tldrSummary.join(' ')
-      });
-    }
-    
-    // Add takeaways if available
-    if (post.keyTakeaways && Array.isArray(post.keyTakeaways) && post.keyTakeaways.length > 0) {
-      fallbackSections.push({
-        type: 'takeaways',
-        data: post.keyTakeaways
-      });
-    }
-    
-    // Add main content
-    if (post.optimizedContent || post.content) {
-      fallbackSections.push({
-        type: 'paragraph',
-        content: post.optimizedContent || post.content
-      });
-    }
-    
-    // Add quote if available
-    if (post.expertQuote && post.expertQuote.quote) {
-      fallbackSections.push({
-        type: 'quote',
-        data: {
-          text: post.expertQuote.quote,
-          author: post.expertQuote.author || '',
-          source: post.expertQuote.role || ''
-        }
-      });
-    }
-    
-    // If still no sections, create a minimal one
-    if (fallbackSections.length === 0) {
-      fallbackSections.push({
-        type: 'paragraph',
-        content: 'Blog post content is being processed. Please try optimizing again.'
-      });
-    }
-    
-    normalized.sections = fallbackSections;
-    console.log(`[validateBlogPost] Created ${normalized.sections.length} fallback sections`);
+    console.warn('[validateBlogPost] No sections found, creating default section');
+    normalized.sections = [{
+      type: 'paragraph',
+      content: post.content || post.optimizedContent || 'No content available.'
+    }];
   }
 
-  console.log('[validateBlogPost] Final normalized post:', {
-    title: normalized.title,
-    sectionsCount: normalized.sections.length,
-    sectionTypes: normalized.sections.map(s => s.type)
-  });
-  
+  console.log('[validateBlogPost] Normalized post:', JSON.stringify(normalized, null, 2));
   return normalized;
 }
 
 /**
- * BlogPostDisplay Component - ENTERPRISE-GRADE with comprehensive error handling
+ * SOTA ENTERPRISE-GRADE: Main BlogPost Display Component
  */
-export interface BlogPostDisplayProps {
-  postId?: string;
-  post?: any; // Accept any shape, we'll validate it
-  isLoading?: boolean;
-  error?: string;
-  onRetry?: () => void;
+interface BlogPostDisplayProps {
+  post: any;
+  onOptimizeSuccess?: (optimizedPost: any) => void;
 }
 
-export function BlogPostDisplay({ postId, post, isLoading, error, onRetry }: BlogPostDisplayProps) {
-  const [displayPost, setDisplayPost] = useState<BlogPostContent | null>(null);
-  const [displayLoading, setDisplayLoading] = useState(isLoading || false);
-  const [displayError, setDisplayError] = useState<string | null>(error || null);
-  const [validationError, setValidationError] = useState<string | null>(null);
+export default function BlogPostDisplay({ post, onOptimizeSuccess }: BlogPostDisplayProps) {
+  const [normalizedPost, setNormalizedPost] = useState<BlogPostContent | null>(null);
+  const [isProcessing, setIsProcessing] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    console.log('[BlogPostDisplay] Received post:', post);
+    console.log('[BlogPostDisplay] Post prop changed:', post);
     
-    setDisplayLoading(isLoading || false);
-    setDisplayError(error || null);
-    setValidationError(null);
-
-    if (post) {
-      const validated = validateAndNormalizeBlogPost(post);
-      if (validated) {
-        setDisplayPost(validated);
-        console.log('[BlogPostDisplay] Post validated successfully');
-      } else {
-        setValidationError('Failed to parse blog post data');
-        setDisplayPost(null);
-        console.error('[BlogPostDisplay] Post validation failed');
-      }
-    } else {
-      setDisplayPost(null);
+    if (!post) {
+      console.error('[BlogPostDisplay] No post provided');
+      setError('No blog post data provided');
+      setIsProcessing(false);
+      return;
     }
-  }, [post, isLoading, error]);
+
+    // Validate and normalize the post
+    const validated = validateAndNormalizeBlogPost(post);
+    
+    if (!validated) {
+      console.error('[BlogPostDisplay] Post validation failed');
+      setError('Failed to validate blog post data');
+      setIsProcessing(false);
+      return;
+    }
+
+    console.log('[BlogPostDisplay] Post validated successfully');
+    setNormalizedPost(validated);
+    setError(null);
+    setIsProcessing(false);
+  }, [post]);
 
   // Loading state
-  if (displayLoading) {
+  if (isProcessing) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-4" />
-          <p className="text-gray-700 font-medium">Rendering your optimized blog post...</p>
-          <p className="text-sm text-gray-500 mt-1">This won't take long</p>
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+          <p className="text-sm text-gray-600">Processing blog post...</p>
         </div>
       </div>
     );
   }
 
   // Error state
-  if (displayError || validationError) {
+  if (error || !normalizedPost) {
     return (
       <div className="p-6 bg-red-50 border-2 border-red-200 rounded-lg">
         <div className="flex items-start gap-3">
           <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
           <div>
-            <h3 className="font-bold text-red-900 mb-1">Error Loading Blog Post</h3>
-            <p className="text-sm text-red-800 mb-3">{displayError || validationError}</p>
-            {onRetry && (
-              <button
-                onClick={onRetry}
-                className="flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded text-sm hover:bg-red-700"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Try Again
-              </button>
-            )}
+            <h3 className="font-bold text-red-900 mb-1">Display Error</h3>
+            <p className="text-sm text-red-800">
+              {error || 'Unable to display blog post'}
+            </p>
           </div>
         </div>
       </div>
     );
   }
 
-  // No post
-  if (!displayPost) {
-    return (
-      <div className="p-6 bg-gray-50 border-2 border-gray-200 rounded-lg text-center">
-        <p className="text-gray-700">No blog post to display. Click "Optimize" to generate one!</p>
-      </div>
-    );
-  }
-
-  // CRITICAL SAFETY CHECK: Ensure sections exist
-  if (!displayPost.sections || displayPost.sections.length === 0) {
-    console.error('[BlogPostDisplay] Post has no sections!', displayPost);
-    return (
-      <div className="p-6 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
-        <div className="flex items-start gap-3">
-          <AlertCircle className="w-6 h-6 text-yellow-600 flex-shrink-0 mt-0.5" />
-          <div>
-            <h3 className="font-bold text-yellow-900 mb-1">Content Structure Issue</h3>
-            <p className="text-sm text-yellow-800 mb-3">
-              The blog post was generated but has no displayable sections. 
-              This might be a temporary issue.
-            </p>
-            <p className="text-xs text-yellow-700 mb-3">
-              Title: {displayPost.title}
-            </p>
-            <button
-              onClick={() => window.location.reload()}
-              className="flex items-center gap-2 px-3 py-1.5 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Reload Page
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Render blog post with error boundary
+  // Render the blog post
   return (
-    <BlogErrorBoundary
-      onError={(err) => {
-        console.error('[BlogPostDisplay] Render error:', err);
-        console.error('[BlogPostDisplay] Post that caused error:', displayPost);
-      }}
-    >
-      <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-        <BlogPostRenderer post={displayPost} />
+    <BlogErrorBoundary>
+      <div className="max-w-4xl mx-auto">
+        <BlogPostRenderer post={normalizedPost} />
       </div>
     </BlogErrorBoundary>
   );
 }
-
-export default BlogPostDisplay;
