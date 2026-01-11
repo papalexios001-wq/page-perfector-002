@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
-import { BlogPostRenderer, BlogPostContent } from '../BlogPostComponents';
+import { BlogPostRenderer, BlogPostContent } from ../BlogPostComponents';
 
 /**
  * ERROR BOUNDARY - Catches rendering crashes
