@@ -3,6 +3,7 @@
 import React, { useState, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { BlogPostRenderer, BlogPostContent } from './BlogPostComponents';
+import { usePagesStore } from '../../stores/pages-store';
 
 /**
  * ERROR BOUNDARY - Catches rendering crashes
@@ -66,30 +67,49 @@ class BlogErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
 }
 
 /**
- * ENTERPRISE-GRADE: Validates and normalizes blog post data with comprehensive fallbacks
+ * ENTERPRISE-GRADE: Validates and normalizes blog post data
  */
-function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
-  console.log('[validateBlogPost] Input post:', JSON.stringify(post, null, 2));
+function validateAndNormalizeBlogPost(pageData: any): BlogPostContent | null {
+  console.log('[validateBlogPost] Input pageData:', JSON.stringify(pageData, null, 2));
   
-  if (!post || typeof post !== 'object') {
-    console.error('[validateBlogPost] Invalid post: not an object', post);
+  if (!pageData || typeof pageData !== 'object') {
+    console.error('[validateBlogPost] Invalid pageData: not an object', pageData);
     return null;
   }
 
-  // Ensure required fields exist
+  // Extract optimized content - it might be in different locations
+  const optimizedContent = pageData.optimizedContent || pageData.content || pageData.result;
+  
+  if (!optimizedContent) {
+    console.error('[validateBlogPost] No optimized content found in pageData');
+    return null;
+  }
+
+  // Parse if it's a string
+  let blogPost = optimizedContent;
+  if (typeof optimizedContent === 'string') {
+    try {
+      blogPost = JSON.parse(optimizedContent);
+    } catch (e) {
+      console.error('[validateBlogPost] Failed to parse optimizedContent as JSON:', e);
+      return null;
+    }
+  }
+
+  // Normalize the blog post structure
   const normalized: BlogPostContent = {
-    title: post.title || post.optimizedTitle || 'Untitled Post',
-    author: post.author || 'Content Expert',
-    publishedAt: post.publishedAt || new Date().toISOString(),
-    excerpt: post.excerpt || post.metaDescription || '',
+    title: blogPost.title || blogPost.optimizedTitle || pageData.title || 'Untitled Post',
+    author: blogPost.author || 'Content Expert',
+    publishedAt: blogPost.publishedAt || pageData.publishedAt || new Date().toISOString(),
+    excerpt: blogPost.excerpt || blogPost.metaDescription || '',
     sections: [],
   };
 
   // Validate and normalize sections
-  if (Array.isArray(post.sections) && post.sections.length > 0) {
-    console.log(`[validateBlogPost] Processing ${post.sections.length} sections`);
+  if (Array.isArray(blogPost.sections) && blogPost.sections.length > 0) {
+    console.log(`[validateBlogPost] Processing ${blogPost.sections.length} sections`);
     
-    normalized.sections = post.sections.map((section: any, index: number) => {
+    normalized.sections = blogPost.sections.map((section: any, index: number) => {
       if (!section || typeof section !== 'object') {
         console.warn(`[validateBlogPost] Section ${index} is invalid, skipping`);
         return null;
@@ -100,15 +120,11 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
         content: section.content || '',
       };
 
-      // Handle different section types
+      // Handle section-specific data
       switch (section.type) {
         case 'takeaways':
           normalizedSection.data = Array.isArray(section.data) ? section.data : [];
-          if (normalizedSection.data.length === 0) {
-            console.warn(`[validateBlogPost] Takeaways section ${index} has no data`);
-          }
           break;
-        
         case 'quote':
           normalizedSection.data = {
             text: section.data?.text || section.text || section.content || '',
@@ -116,7 +132,6 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
             source: section.data?.source || section.source || '',
           };
           break;
-        
         case 'cta':
           normalizedSection.data = {
             title: section.data?.title || section.title || 'Take Action',
@@ -125,14 +140,12 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
             buttonLink: section.data?.buttonLink || section.buttonLink || '#',
           };
           break;
-        
         case 'video':
           normalizedSection.data = {
             videoId: section.data?.videoId || section.videoId || '',
             title: section.data?.title || section.title || 'Video',
           };
           break;
-        
         case 'table':
           normalizedSection.data = {
             headers: Array.isArray(section.data?.headers) ? section.data.headers : [],
@@ -140,20 +153,16 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
             title: section.data?.title || section.title || '',
           };
           break;
-        
         case 'patent':
           normalizedSection.data = Array.isArray(section.data) ? section.data : [];
           break;
-        
         case 'chart':
           normalizedSection.data = {
             title: section.data?.title || section.title || 'Chart',
             description: section.data?.description || section.description || '',
           };
           break;
-        
         default:
-          // For heading, paragraph, tldr, summary - just use content
           normalizedSection.content = section.content || '';
           break;
       }
@@ -164,7 +173,7 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
     console.warn('[validateBlogPost] No sections found, creating default section');
     normalized.sections = [{
       type: 'paragraph',
-      content: post.content || post.optimizedContent || 'No content available.'
+      content: blogPost.content || blogPost.optimizedContent || 'No content available.'
     }];
   }
 
@@ -174,42 +183,66 @@ function validateAndNormalizeBlogPost(post: any): BlogPostContent | null {
 
 /**
  * SOTA ENTERPRISE-GRADE: Main BlogPost Display Component
+ * Accepts slug, fetches page data from store, validates and renders
  */
 interface BlogPostDisplayProps {
-  post: any;
-  onOptimizeSuccess?: (optimizedPost: any) => void;
+  slug: string;
 }
 
-export default function BlogPostDisplay({ post, onOptimizeSuccess }: BlogPostDisplayProps) {
+export default function BlogPostDisplay({ slug }: BlogPostDisplayProps) {
   const [normalizedPost, setNormalizedPost] = useState<BlogPostContent | null>(null);
   const [isProcessing, setIsProcessing] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Get pages from store
+  const pages = usePagesStore((state) => state.pages);
 
   useEffect(() => {
-    console.log('[BlogPostDisplay] Post prop changed:', post);
+    console.log('[BlogPostDisplay] Slug changed:', slug);
+    console.log('[BlogPostDisplay] Available pages:', pages);
     
-    if (!post) {
-      console.error('[BlogPostDisplay] No post provided');
-      setError('No blog post data provided');
+    if (!slug) {
+      console.error('[BlogPostDisplay] No slug provided');
+      setError('No blog post identifier provided');
       setIsProcessing(false);
       return;
     }
 
-    // Validate and normalize the post
-    const validated = validateAndNormalizeBlogPost(post);
+    // Find the page in the store by slug
+    const pageData = pages.find(p => p.slug === slug);
+    
+    if (!pageData) {
+      console.error('[BlogPostDisplay] Page not found in store for slug:', slug);
+      setError(`Blog post not found: ${slug}`);
+      setIsProcessing(false);
+      return;
+    }
+
+    console.log('[BlogPostDisplay] Found page data:', pageData);
+
+    // Check if page has been optimized
+    if (!pageData.optimizedAt && !pageData.optimizedContent) {
+      console.warn('[BlogPostDisplay] Page not optimized yet');
+      setError('This blog post has not been optimized yet');
+      setIsProcessing(false);
+      return;
+    }
+
+    // Validate and normalize the page data
+    const validated = validateAndNormalizeBlogPost(pageData);
     
     if (!validated) {
-      console.error('[BlogPostDisplay] Post validation failed');
+      console.error('[BlogPostDisplay] Page validation failed');
       setError('Failed to validate blog post data');
       setIsProcessing(false);
       return;
     }
 
-    console.log('[BlogPostDisplay] Post validated successfully');
+    console.log('[BlogPostDisplay] Page validated successfully');
     setNormalizedPost(validated);
     setError(null);
     setIsProcessing(false);
-  }, [post]);
+  }, [slug, pages]);
 
   // Loading state
   if (isProcessing) {
@@ -217,7 +250,7 @@ export default function BlogPostDisplay({ post, onOptimizeSuccess }: BlogPostDis
       <div className="flex items-center justify-center py-12">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-          <p className="text-sm text-gray-600">Processing blog post...</p>
+          <p className="text-sm text-gray-600">Loading blog post...</p>
         </div>
       </div>
     );
