@@ -1,93 +1,57 @@
 // supabase/functions/publish-to-wordpress/index.ts
-// ============================================================================
-// WORDPRESS PUBLISHING - Fixed version with proper error handling
-// ============================================================================
-
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-serve(async (req: Request) => {
+serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-  const supabase = createClient(supabaseUrl, supabaseKey);
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL') || '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+  );
 
   try {
     const body = await req.json();
     
-    console.log('[publish-to-wordpress] Request received');
-    console.log('[publish-to-wordpress] Title:', body.title?.slice(0, 50));
-    console.log('[publish-to-wordpress] Content length:', body.content?.length || 0);
-    console.log('[publish-to-wordpress] Status:', body.status);
-
-    // Validate content
     if (!body.content || body.content.length < 50) {
       return new Response(
-        JSON.stringify({ success: false, error: 'Content is too short or missing' }),
+        JSON.stringify({ success: false, error: 'Content too short' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
 
     // Get WordPress credentials
-    const { data: sites, error: sitesError } = await supabase
+    const { data: sites } = await supabase
       .from('sites')
       .select('*')
       .limit(1)
       .single();
 
-    if (sitesError || !sites) {
-      console.error('[publish-to-wordpress] No site configured');
+    if (!sites?.wp_url || !sites?.wp_username || !sites?.wp_app_password) {
       return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'WordPress site not configured. Add credentials in Configuration tab.' 
-        }),
+        JSON.stringify({ success: false, error: 'WordPress not configured' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
 
-    const wpUrl = sites.wp_url;
-    const wpUsername = sites.wp_username;
-    const wpPassword = sites.wp_app_password;
+    let wpUrl = sites.wp_url.trim();
+    if (!wpUrl.startsWith('http')) wpUrl = 'https://' + wpUrl;
+    wpUrl = wpUrl.replace(/\/+$/, '');
 
-    if (!wpUrl || !wpUsername || !wpPassword) {
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'WordPress credentials incomplete' 
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
-      );
-    }
+    const auth = btoa(`${sites.wp_username}:${sites.wp_app_password}`);
 
-    // Normalize URL
-    let normalizedUrl = wpUrl.trim();
-    if (!normalizedUrl.startsWith('http')) {
-      normalizedUrl = 'https://' + normalizedUrl;
-    }
-    normalizedUrl = normalizedUrl.replace(/\/+$/, '');
-
-    console.log('[publish-to-wordpress] WordPress URL:', normalizedUrl);
-
-    // Create the post
-    const endpoint = `${normalizedUrl}/wp-json/wp/v2/posts`;
-    const authHeader = 'Basic ' + btoa(`${wpUsername}:${wpPassword}`);
-
-    const response = await fetch(endpoint, {
+    const res = await fetch(`${wpUrl}/wp-json/wp/v2/posts`, {
       method: 'POST',
       headers: {
-        'Authorization': authHeader,
+        'Authorization': `Basic ${auth}`,
         'Content-Type': 'application/json',
-        'User-Agent': 'PagePerfector/1.0',
       },
       body: JSON.stringify({
         title: body.title || 'Optimized Post',
@@ -96,52 +60,24 @@ serve(async (req: Request) => {
       }),
     });
 
-    const responseText = await response.text();
-    console.log('[publish-to-wordpress] Response:', response.status);
-
-    if (!response.ok) {
-      let errorMessage = `WordPress API error: ${response.status}`;
-      try {
-        const errorData = JSON.parse(responseText);
-        errorMessage = errorData.message || errorData.code || errorMessage;
-      } catch {}
-
+    if (!res.ok) {
+      const err = await res.text();
       return new Response(
-        JSON.stringify({ success: false, error: errorMessage }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: response.status }
+        JSON.stringify({ success: false, error: `WordPress error: ${res.status}` }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: res.status }
       );
     }
 
-    const wpPost = JSON.parse(responseText);
-    console.log('[publish-to-wordpress] Created post:', wpPost.id);
-
-    // Update page record
-    if (body.pageId) {
-      await supabase.from('pages').update({
-        post_id: wpPost.id,
-        status: body.status === 'publish' ? 'published' : 'draft',
-        updated_at: new Date().toISOString(),
-      }).eq('id', body.pageId);
-    }
+    const post = await res.json();
 
     return new Response(
-      JSON.stringify({
-        success: true,
-        postId: wpPost.id,
-        postUrl: wpPost.link,
-        status: body.status,
-        message: `Post ${body.status === 'publish' ? 'published' : 'saved as draft'}`,
-      }),
+      JSON.stringify({ success: true, postId: post.id, postUrl: post.link }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (error) {
-    console.error('[publish-to-wordpress] Error:', error);
+  } catch (err) {
     return new Response(
-      JSON.stringify({ 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }),
+      JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'Error' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     );
   }
