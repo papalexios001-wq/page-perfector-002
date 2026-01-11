@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   List, Search, Filter, Zap, Eye, Trash2, RotateCcw, FileText, 
@@ -47,10 +47,10 @@ interface DBPage {
 }
 
 interface OptimizationResult {
-  optimizedTitle: string;
-  metaDescription: string;
-  h1: string;
-  h2s: string[];
+  optimizedTitle?: string;
+  metaDescription?: string;
+  h1?: string;
+  h2s?: string[];
   optimizedContent?: string;
   tldrSummary?: string[];
   expertQuote?: { quote: string; author: string; role: string };
@@ -58,25 +58,25 @@ interface OptimizationResult {
   patentReference?: { type: string; identifier: string; title: string; summary: string; link: string };
   faqs?: Array<{ question: string; answer: string }>;
   keyTakeaways?: string[];
-  contentStrategy: {
-    wordCount: number;
-    readabilityScore: number;
-    keywordDensity: number;
-    lsiKeywords: string[];
+  contentStrategy?: {
+    wordCount?: number;
+    readabilityScore?: number;
+    keywordDensity?: number;
+    lsiKeywords?: string[];
   };
-  internalLinks: Array<{ anchor: string; target: string; position: number }>;
-  schema: Record<string, unknown>;
-  aiSuggestions: {
-    contentGaps: string;
-    quickWins: string;
-    improvements: string[];
+  internalLinks?: Array<{ anchor: string; target: string; position: number }>;
+  schema?: Record<string, unknown>;
+  aiSuggestions?: {
+    contentGaps?: string;
+    quickWins?: string;
+    improvements?: string[];
   };
-  qualityScore: number;
+  qualityScore?: number;
   seoScore?: number;
   readabilityScore?: number;
   engagementScore?: number;
-  estimatedRankPosition: number;
-  confidenceLevel: number;
+  estimatedRankPosition?: number;
+  confidenceLevel?: number;
 }
 
 interface ValidationCheck {
@@ -101,6 +101,21 @@ interface BatchProgress {
   failed: number;
   current: string;
   status: 'idle' | 'running' | 'complete' | 'error';
+}
+
+// ============================================================================
+// SAFE DATA ACCESS HELPERS
+// ============================================================================
+function safeGetArray<T>(arr: T[] | undefined | null): T[] {
+  return Array.isArray(arr) ? arr : [];
+}
+
+function safeGetNumber(val: number | undefined | null, defaultVal: number = 0): number {
+  return typeof val === 'number' ? val : defaultVal;
+}
+
+function safeGetString(val: string | undefined | null, defaultVal: string = ''): string {
+  return typeof val === 'string' ? val : defaultVal;
 }
 
 export function PageQueue() {
@@ -137,6 +152,95 @@ export function PageQueue() {
   
   const { wordpress, ai, neuronWriter, optimization: optimizationSettings, advanced, siteContext } = useConfigStore();
 
+  // ============================================================================
+  // FIX: Use ref to always have access to fresh pages data in callbacks
+  // ============================================================================
+  const pagesRef = useRef<DBPage[]>([]);
+  const batchProgressRef = useRef<BatchProgress>(batchProgress);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    pagesRef.current = pages;
+  }, [pages]);
+
+  useEffect(() => {
+    batchProgressRef.current = batchProgress;
+  }, [batchProgress]);
+
+  // ============================================================================
+  // SAFE onComplete handler with error boundary
+  // ============================================================================
+  const handleJobComplete = useCallback(async (job: any) => {
+    console.log('[PageQueue] Job completed:', job);
+    
+    try {
+      // For single optimization, show result dialog
+      if (batchProgressRef.current.status === 'idle') {
+        setIsOptimizing(false);
+        setOptimizingPageTitle('');
+        
+        // Fetch fresh pages data
+        await fetchPages();
+        
+        // Use ref to get fresh pages data
+        const freshPages = pagesRef.current;
+        
+        if (job?.result) {
+          const pageToShow = freshPages.find(p => p.id === job.pageId);
+          
+          if (pageToShow) {
+            // Safely cast and validate the result
+            const optimization = job.result as OptimizationResult;
+            
+            setSelectedPageResult({ page: pageToShow, result: optimization });
+            setShowResultDialog(true);
+            
+            // Safe access to properties
+            const qualityScore = safeGetNumber(optimization?.qualityScore, 0);
+            const wordCount = safeGetNumber(optimization?.contentStrategy?.wordCount, 0);
+            
+            toast.success('Page optimized successfully!', {
+              description: `Quality score: ${qualityScore}/100, Words: ${wordCount || 'N/A'}`,
+            });
+          } else {
+            console.warn('[PageQueue] Could not find page after optimization:', job.pageId);
+            toast.success('Optimization completed!', {
+              description: 'Refresh the page to see results.',
+            });
+          }
+        } else {
+          toast.success('Optimization completed!');
+        }
+      }
+    } catch (error) {
+      console.error('[PageQueue] Error in onComplete handler:', error);
+      setIsOptimizing(false);
+      setOptimizingPageTitle('');
+      toast.success('Optimization completed!', {
+        description: 'Check the results in the table.',
+      });
+    }
+  }, []);
+
+  const handleJobError = useCallback(async (job: any) => {
+    console.log('[PageQueue] Job failed:', job);
+    
+    try {
+      if (batchProgressRef.current.status === 'idle') {
+        setIsOptimizing(false);
+        setOptimizingPageTitle('');
+        await fetchPages();
+        toast.error('Optimization failed', {
+          description: job?.errorMessage || 'Check the console for details.',
+        });
+      }
+    } catch (error) {
+      console.error('[PageQueue] Error in onError handler:', error);
+      setIsOptimizing(false);
+      setOptimizingPageTitle('');
+    }
+  }, []);
+
   // Real-time job progress hook
   const { 
     activeJob, 
@@ -147,40 +251,8 @@ export function PageQueue() {
     isCompleted: jobIsCompleted,
     isFailed: jobIsFailed
   } = useJobProgress({
-    onComplete: async (job) => {
-      console.log('[PageQueue] Job completed:', job);
-      
-      // For single optimization, show result dialog
-      if (batchProgress.status === 'idle') {
-        setIsOptimizing(false);
-        setOptimizingPageTitle('');
-        await fetchPages();
-        
-        if (job.result) {
-          const pageToShow = pages.find(p => p.id === job.pageId);
-          if (pageToShow) {
-            const optimization = job.result as unknown as OptimizationResult;
-            setSelectedPageResult({ page: pageToShow, result: optimization });
-            setShowResultDialog(true);
-            toast.success('Page optimized successfully!', {
-              description: `Quality score: ${optimization.qualityScore}/100, Words: ${optimization.contentStrategy?.wordCount || 'N/A'}`,
-            });
-          }
-        }
-      }
-    },
-    onError: async (job) => {
-      console.log('[PageQueue] Job failed:', job);
-      
-      if (batchProgress.status === 'idle') {
-        setIsOptimizing(false);
-        setOptimizingPageTitle('');
-        await fetchPages();
-        toast.error('Optimization failed', {
-          description: job.errorMessage || 'Check the console for details.',
-        });
-      }
-    }
+    onComplete: handleJobComplete,
+    onError: handleJobError,
   });
 
   // Update step visualization based on real job progress
@@ -202,7 +274,9 @@ export function PageQueue() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setPages(data || []);
+      const fetchedPages = data || [];
+      setPages(fetchedPages);
+      pagesRef.current = fetchedPages; // Update ref immediately
     } catch (error) {
       console.error('Error fetching pages:', error);
       toast.error('Failed to load pages');
@@ -252,48 +326,53 @@ export function PageQueue() {
       projectName: neuronWriter.selectedProjectName,
     } : undefined;
 
-    const { data, error } = await invokeEdgeFunction<{
-      success: boolean;
-      message: string;
-      jobId?: string;
-      optimization?: OptimizationResult;
-      error?: string;
-    }>('optimize-content', {
-      pageId,
-      siteUrl: wordpress.siteUrl,
-      username: wordpress.username,
-      applicationPassword: wordpress.applicationPassword,
-      aiConfig: aiConfigPayload,
-      neuronWriter: neuronWriterPayload,
-      advanced: {
-        targetScore: advanced.targetScore,
-        minWordCount: advanced.minWordCount,
-        maxWordCount: advanced.maxWordCount,
-        enableFaqs: advanced.enableFaqs,
-        enableSchema: advanced.enableSchema,
-        enableInternalLinks: advanced.enableInternalLinks,
-        enableToc: advanced.enableToc,
-        enableKeyTakeaways: advanced.enableKeyTakeaways,
-        enableCtas: advanced.enableCtas,
-      },
-      siteContext: {
-        organizationName: siteContext.organizationName,
-        industry: siteContext.industry,
-        targetAudience: siteContext.targetAudience,
-        brandVoice: siteContext.brandVoice,
-      },
-    });
+    try {
+      const { data, error } = await invokeEdgeFunction<{
+        success: boolean;
+        message: string;
+        jobId?: string;
+        optimization?: OptimizationResult;
+        error?: string;
+      }>('optimize-content', {
+        pageId,
+        siteUrl: wordpress.siteUrl,
+        username: wordpress.username,
+        applicationPassword: wordpress.applicationPassword,
+        aiConfig: aiConfigPayload,
+        neuronWriter: neuronWriterPayload,
+        advanced: {
+          targetScore: advanced.targetScore,
+          minWordCount: advanced.minWordCount,
+          maxWordCount: advanced.maxWordCount,
+          enableFaqs: advanced.enableFaqs,
+          enableSchema: advanced.enableSchema,
+          enableInternalLinks: advanced.enableInternalLinks,
+          enableToc: advanced.enableToc,
+          enableKeyTakeaways: advanced.enableKeyTakeaways,
+          enableCtas: advanced.enableCtas,
+        },
+        siteContext: {
+          organizationName: siteContext.organizationName,
+          industry: siteContext.industry,
+          targetAudience: siteContext.targetAudience,
+          brandVoice: siteContext.brandVoice,
+        },
+      });
 
-    if (error) {
-      console.error(`[Optimize] Error for ${pageId}:`, error);
-      return { success: false, error: error.message };
+      if (error) {
+        console.error(`[Optimize] Error for ${pageId}:`, error);
+        return { success: false, error: error.message };
+      }
+
+      return { 
+        success: data?.success || false, 
+        jobId: data?.jobId,
+        error: data?.error 
+      };
+    } catch (err) {
+      console.error(`[Optimize] Exception for ${pageId}:`, err);
+      return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
     }
-
-    return { 
-      success: data?.success || false, 
-      jobId: data?.jobId,
-      error: data?.error 
-    };
   }, [wordpress, ai, neuronWriter, advanced, siteContext]);
 
   // Wait for a job to complete by polling the database
@@ -302,23 +381,27 @@ export function PageQueue() {
     const pollInterval = 3000; // 3 seconds
 
     while (Date.now() - startTime < timeoutMs) {
-      const { data: jobData, error } = await supabase
-        .from('jobs')
-        .select('status, error_message, result')
-        .eq('id', jobId)
-        .single();
+      try {
+        const { data: jobData, error } = await supabase
+          .from('jobs')
+          .select('status, error_message, result')
+          .eq('id', jobId)
+          .single();
 
-      if (error) {
-        console.error(`[WaitForJob] Error polling job ${jobId}:`, error);
-        return { success: false, error: error.message };
-      }
+        if (error) {
+          console.error(`[WaitForJob] Error polling job ${jobId}:`, error);
+          return { success: false, error: error.message };
+        }
 
-      if (jobData?.status === 'completed') {
-        return { success: true };
-      }
+        if (jobData?.status === 'completed') {
+          return { success: true };
+        }
 
-      if (jobData?.status === 'failed') {
-        return { success: false, error: jobData.error_message || 'Job failed' };
+        if (jobData?.status === 'failed') {
+          return { success: false, error: jobData.error_message || 'Job failed' };
+        }
+      } catch (err) {
+        console.error(`[WaitForJob] Exception polling job ${jobId}:`, err);
       }
 
       // Wait before next poll
@@ -372,7 +455,7 @@ export function PageQueue() {
   }, [wordpress]);
 
   // ============================================================
-  // FIXED: BATCH OPTIMIZATION - Process pages sequentially with proper tracking
+  // BATCH OPTIMIZATION - Process pages sequentially
   // ============================================================
   const handleOptimizeSelected = async () => {
     if (selectedPages.length === 0) {
@@ -396,13 +479,15 @@ export function PageQueue() {
     const pagesToOptimize = pages.filter(p => selectedPages.includes(p.id));
     
     // Initialize batch progress
-    setBatchProgress({
+    const initialBatchProgress: BatchProgress = {
       total: pagesToOptimize.length,
       completed: 0,
       failed: 0,
       current: pagesToOptimize[0]?.title || pagesToOptimize[0]?.slug || 'Unknown',
       status: 'running',
-    });
+    };
+    setBatchProgress(initialBatchProgress);
+    batchProgressRef.current = initialBatchProgress;
     setShowBatchDialog(true);
     setIsOptimizing(true);
 
@@ -414,11 +499,15 @@ export function PageQueue() {
       const page = pagesToOptimize[i];
       
       // Update batch progress
-      setBatchProgress(prev => ({
-        ...prev,
-        current: page.title || page.slug || 'Unknown',
-        completed: i,
-      }));
+      setBatchProgress(prev => {
+        const updated = {
+          ...prev,
+          current: page.title || page.slug || 'Unknown',
+          completed: i,
+        };
+        batchProgressRef.current = updated;
+        return updated;
+      });
 
       // Update page status in UI
       setPages(prev => prev.map(p => p.id === page.id ? { ...p, status: 'optimizing' } : p));
@@ -432,7 +521,11 @@ export function PageQueue() {
         console.error(`[Batch] Failed to start job for ${page.slug}:`, startError);
         errorCount++;
         setPages(prev => prev.map(p => p.id === page.id ? { ...p, status: 'failed' } : p));
-        setBatchProgress(prev => ({ ...prev, failed: prev.failed + 1 }));
+        setBatchProgress(prev => {
+          const updated = { ...prev, failed: prev.failed + 1 };
+          batchProgressRef.current = updated;
+          return updated;
+        });
         continue;
       }
 
@@ -447,7 +540,11 @@ export function PageQueue() {
         console.error(`[Batch] Job failed for ${page.slug}:`, jobError);
         errorCount++;
         setPages(prev => prev.map(p => p.id === page.id ? { ...p, status: 'failed' } : p));
-        setBatchProgress(prev => ({ ...prev, failed: prev.failed + 1 }));
+        setBatchProgress(prev => {
+          const updated = { ...prev, failed: prev.failed + 1 };
+          batchProgressRef.current = updated;
+          return updated;
+        });
       }
 
       // Small delay between jobs to avoid rate limiting
@@ -457,11 +554,15 @@ export function PageQueue() {
     }
 
     // Complete batch
-    setBatchProgress(prev => ({
-      ...prev,
-      completed: prev.total,
+    const finalProgress: BatchProgress = {
+      total: pagesToOptimize.length,
+      completed: pagesToOptimize.length,
+      failed: errorCount,
+      current: '',
       status: errorCount === pagesToOptimize.length ? 'error' : 'complete',
-    }));
+    };
+    setBatchProgress(finalProgress);
+    batchProgressRef.current = finalProgress;
 
     // Refresh pages and cleanup
     await fetchPages();
@@ -471,7 +572,9 @@ export function PageQueue() {
     // Show summary toast
     setTimeout(() => {
       setShowBatchDialog(false);
-      setBatchProgress({ total: 0, completed: 0, failed: 0, current: '', status: 'idle' });
+      const idleProgress: BatchProgress = { total: 0, completed: 0, failed: 0, current: '', status: 'idle' };
+      setBatchProgress(idleProgress);
+      batchProgressRef.current = idleProgress;
       
       if (successCount > 0 && errorCount === 0) {
         toast.success(`Successfully optimized ${successCount} pages!`);
@@ -484,85 +587,104 @@ export function PageQueue() {
   };
 
   const handleOptimizeSingle = async (pageId: string) => {
-    setOptimizationSteps(prev => prev.map((s, i) => ({ ...s, status: i === 0 ? 'active' : 'pending' })));
-    
-    const wpValidation = await validateWordPressConnection();
-    if (!wpValidation.valid) {
-      toast.error('WordPress Connection Failed', {
-        description: wpValidation.error,
-      });
-      return;
-    }
+    try {
+      setOptimizationSteps(prev => prev.map((s, i) => ({ ...s, status: i === 0 ? 'active' : 'pending' })));
+      
+      const wpValidation = await validateWordPressConnection();
+      if (!wpValidation.valid) {
+        toast.error('WordPress Connection Failed', {
+          description: wpValidation.error,
+        });
+        return;
+      }
 
-    const pageToOptimize = pages.find(p => p.id === pageId);
-    if (!pageToOptimize) {
-      toast.error('Page not found');
-      return;
-    }
+      const pageToOptimize = pages.find(p => p.id === pageId);
+      if (!pageToOptimize) {
+        toast.error('Page not found');
+        return;
+      }
 
-    setIsOptimizing(true);
-    setOptimizingPageTitle(pageToOptimize.title || pageToOptimize.slug || 'Unknown page');
-    
-    setPages(prev => prev.map(p => p.id === pageId ? { ...p, status: 'optimizing' } : p));
+      setIsOptimizing(true);
+      setOptimizingPageTitle(pageToOptimize.title || pageToOptimize.slug || 'Unknown page');
+      
+      setPages(prev => prev.map(p => p.id === pageId ? { ...p, status: 'optimizing' } : p));
 
-    // Start watching for real-time job updates
-    await watchJob(pageId);
+      // Start watching for real-time job updates
+      await watchJob(pageId);
 
-    // Start the async job
-    const { success, error } = await startOptimizationJob(pageId);
-    
-    if (!success) {
+      // Start the async job
+      const { success, error } = await startOptimizationJob(pageId);
+      
+      if (!success) {
+        setIsOptimizing(false);
+        setOptimizingPageTitle('');
+        await stopWatching();
+        await fetchPages();
+        toast.error('Failed to start optimization', {
+          description: error || 'Check the console for details.',
+        });
+      }
+    } catch (err) {
+      console.error('[handleOptimizeSingle] Error:', err);
       setIsOptimizing(false);
       setOptimizingPageTitle('');
-      await stopWatching();
-      await fetchPages();
-      toast.error('Failed to start optimization', {
-        description: error || 'Check the console for details.',
+      toast.error('An error occurred', {
+        description: err instanceof Error ? err.message : 'Unknown error',
       });
     }
   };
 
   const handleViewResult = async (page: DBPage) => {
-    const { data: jobData, error: jobError } = await supabase
-      .from('jobs')
-      .select('result')
-      .eq('page_id', page.id)
-      .eq('status', 'completed')
-      .order('completed_at', { ascending: false })
-      .limit(1);
+    try {
+      const { data: jobData, error: jobError } = await supabase
+        .from('jobs')
+        .select('result')
+        .eq('page_id', page.id)
+        .eq('status', 'completed')
+        .order('completed_at', { ascending: false })
+        .limit(1);
 
-    if (jobError) {
-      console.error('[ViewResult] Database error:', jobError);
-      toast.error('Failed to load optimization result');
-      return;
-    }
+      if (jobError) {
+        console.error('[ViewResult] Database error:', jobError);
+        toast.error('Failed to load optimization result');
+        return;
+      }
 
-    const result = jobData && jobData.length > 0 
-      ? (jobData[0].result as unknown as OptimizationResult | null)
-      : null;
+      const result = jobData && jobData.length > 0 
+        ? (jobData[0].result as unknown as OptimizationResult | null)
+        : null;
+        
+      if (!result) {
+        toast.warning('No optimization result found', {
+          description: 'Run optimization first before viewing results.',
+        });
+      }
       
-    if (!result) {
-      toast.warning('No optimization result found', {
-        description: 'Run optimization first before viewing results.',
-      });
+      setSelectedPageResult({ page, result });
+      setShowResultDialog(true);
+    } catch (err) {
+      console.error('[handleViewResult] Error:', err);
+      toast.error('Failed to load result');
     }
-    
-    setSelectedPageResult({ page, result });
-    setShowResultDialog(true);
   };
 
   const validateOptimization = async (optimization: OptimizationResult): Promise<ValidationResult | null> => {
-    const { data, error } = await invokeEdgeFunction<ValidationResult>('validate-content', {
-      optimization,
-      minQualityScore: 75,
-    });
+    try {
+      const { data, error } = await invokeEdgeFunction<ValidationResult>('validate-content', {
+        optimization,
+        minQualityScore: 75,
+      });
 
-    if (error) {
-      console.error('[Validate] Error:', error);
+      if (error) {
+        console.error('[Validate] Error:', error);
+        return null;
+      }
+
+      return data;
+    } catch (err) {
+      console.error('[validateOptimization] Error:', err);
       return null;
     }
-
-    return data;
   };
 
   const publishToWordPress = async (
@@ -574,47 +696,52 @@ export function PageQueue() {
       return { success: false, error: 'WordPress not configured' };
     }
 
-    const { data, error } = await invokeEdgeFunction<{
-      success: boolean;
-      message: string;
-      error?: string;
-      postUrl?: string;
-    }>('publish-to-wordpress', {
-      pageId,
-      siteUrl: wordpress.siteUrl,
-      username: wordpress.username,
-      applicationPassword: wordpress.applicationPassword,
-      publishStatus,
-      optimization: {
-        optimizedTitle: optimization.optimizedTitle,
-        metaDescription: optimization.metaDescription,
-        h1: optimization.h1,
-        h2s: optimization.h2s,
-        optimizedContent: optimization.optimizedContent,
-        schema: optimization.schema,
-        internalLinks: optimization.internalLinks,
-      },
-      options: {
-        preserveCategories: optimizationSettings.preserveCategories,
-        preserveTags: optimizationSettings.preserveTags,
-        preserveSlug: optimizationSettings.preserveSlug,
-        preserveFeaturedImage: optimizationSettings.preserveFeaturedImage,
-        updateYoast: true,
-        updateRankMath: true,
-      },
-    });
+    try {
+      const { data, error } = await invokeEdgeFunction<{
+        success: boolean;
+        message: string;
+        error?: string;
+        postUrl?: string;
+      }>('publish-to-wordpress', {
+        pageId,
+        siteUrl: wordpress.siteUrl,
+        username: wordpress.username,
+        applicationPassword: wordpress.applicationPassword,
+        publishStatus,
+        optimization: {
+          optimizedTitle: optimization.optimizedTitle,
+          metaDescription: optimization.metaDescription,
+          h1: optimization.h1,
+          h2s: optimization.h2s,
+          optimizedContent: optimization.optimizedContent,
+          schema: optimization.schema,
+          internalLinks: optimization.internalLinks,
+        },
+        options: {
+          preserveCategories: optimizationSettings.preserveCategories,
+          preserveTags: optimizationSettings.preserveTags,
+          preserveSlug: optimizationSettings.preserveSlug,
+          preserveFeaturedImage: optimizationSettings.preserveFeaturedImage,
+          updateYoast: true,
+          updateRankMath: true,
+        },
+      });
 
-    if (error) {
-      console.error(`[Publish] Network error for ${pageId}:`, error);
-      return { success: false, error: error.message || 'Network error' };
+      if (error) {
+        console.error(`[Publish] Network error for ${pageId}:`, error);
+        return { success: false, error: error.message || 'Network error' };
+      }
+
+      if (!data?.success) {
+        console.error(`[Publish] API error for ${pageId}:`, data?.error || data?.message);
+        return { success: false, error: data?.error || data?.message || 'Unknown error' };
+      }
+
+      return { success: true, postUrl: data.postUrl };
+    } catch (err) {
+      console.error(`[publishToWordPress] Exception for ${pageId}:`, err);
+      return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
     }
-
-    if (!data?.success) {
-      console.error(`[Publish] API error for ${pageId}:`, data?.error || data?.message);
-      return { success: false, error: data?.error || data?.message || 'Unknown error' };
-    }
-
-    return { success: true, postUrl: data.postUrl };
   };
 
   const handleValidateAndPublish = async () => {
@@ -650,7 +777,7 @@ export function PageQueue() {
     }
   };
 
-    const handlePublishSelected = async (publishStatus: 'draft' | 'publish') => {
+  const handlePublishSelected = async (publishStatus: 'draft' | 'publish') => {
     const completedPages = pages.filter(
       p => selectedPages.includes(p.id) && p.status === 'completed'
     );
@@ -962,18 +1089,23 @@ export function PageQueue() {
                                       className="h-7 w-7 text-green-500 hover:text-green-600" 
                                       title="Quick Publish"
                                       onClick={async () => {
-                                        const { data: jobData } = await supabase
-                                          .from('jobs')
-                                          .select('result')
-                                          .eq('page_id', page.id)
-                                          .eq('status', 'completed')
-                                          .order('completed_at', { ascending: false })
-                                          .limit(1)
-                                          .single();
-                                        
-                                        if (jobData?.result) {
-                                          setSelectedPageResult({ page, result: jobData.result as unknown as OptimizationResult });
-                                          handleValidateAndPublish();
+                                        try {
+                                          const { data: jobData } = await supabase
+                                            .from('jobs')
+                                            .select('result')
+                                            .eq('page_id', page.id)
+                                            .eq('status', 'completed')
+                                            .order('completed_at', { ascending: false })
+                                            .limit(1)
+                                            .single();
+                                          
+                                          if (jobData?.result) {
+                                            setSelectedPageResult({ page, result: jobData.result as unknown as OptimizationResult });
+                                            handleValidateAndPublish();
+                                          }
+                                        } catch (err) {
+                                          console.error('Error loading result for publish:', err);
+                                          toast.error('Failed to load optimization result');
                                         }
                                       }}
                                     >
@@ -1068,7 +1200,7 @@ export function PageQueue() {
         </CardContent>
       </Card>
 
-      {/* Result Dialog */}
+      {/* Result Dialog - WITH SAFE DATA ACCESS */}
       <Dialog open={showResultDialog} onOpenChange={setShowResultDialog}>
         <DialogContent className="max-w-2xl max-h-[80vh]">
           <DialogHeader>
@@ -1077,7 +1209,7 @@ export function PageQueue() {
               Optimization Results
             </DialogTitle>
             <DialogDescription>
-              {selectedPageResult?.page.title}
+              {selectedPageResult?.page.title || 'Unknown page'}
             </DialogDescription>
           </DialogHeader>
           
@@ -1087,48 +1219,60 @@ export function PageQueue() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-3 rounded-lg bg-muted/50">
                     <p className="text-xs text-muted-foreground mb-1">Quality Score</p>
-                    <p className="text-2xl font-bold text-primary">{selectedPageResult.result.qualityScore}</p>
+                    <p className="text-2xl font-bold text-primary">
+                      {safeGetNumber(selectedPageResult.result.qualityScore, 0)}
+                    </p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/50">
                     <p className="text-xs text-muted-foreground mb-1">Word Count</p>
-                    <p className="text-2xl font-bold">{selectedPageResult.result.contentStrategy?.wordCount || 'N/A'}</p>
+                    <p className="text-2xl font-bold">
+                      {safeGetNumber(selectedPageResult.result.contentStrategy?.wordCount, 0) || 'N/A'}
+                    </p>
                   </div>
                 </div>
                 <Separator />
                 <div>
                   <p className="text-sm font-medium mb-2">Optimized Title</p>
-                  <p className="text-sm p-2 rounded bg-muted/50">{selectedPageResult.result.optimizedTitle}</p>
+                  <p className="text-sm p-2 rounded bg-muted/50">
+                    {safeGetString(selectedPageResult.result.optimizedTitle, 'No title generated')}
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm font-medium mb-2">Meta Description</p>
-                  <p className="text-sm p-2 rounded bg-muted/50">{selectedPageResult.result.metaDescription}</p>
+                  <p className="text-sm p-2 rounded bg-muted/50">
+                    {safeGetString(selectedPageResult.result.metaDescription, 'No description generated')}
+                  </p>
                 </div>
-                <div>
-                  <p className="text-sm font-medium mb-2">H2 Headings</p>
-                  <ul className="space-y-1">
-                    {selectedPageResult.result.h2s.map((h2, i) => (
-                      <li key={i} className="text-sm p-2 rounded bg-muted/50">• {h2}</li>
-                    ))}
-                  </ul>
-                </div>
-                {selectedPageResult.result.tldrSummary && (
+                {safeGetArray(selectedPageResult.result.h2s).length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium mb-2">H2 Headings</p>
+                    <ul className="space-y-1">
+                      {safeGetArray(selectedPageResult.result.h2s).map((h2, i) => (
+                        <li key={i} className="text-sm p-2 rounded bg-muted/50">• {h2}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {safeGetArray(selectedPageResult.result.tldrSummary).length > 0 && (
                   <div>
                     <p className="text-sm font-medium mb-2">TL;DR Summary</p>
                     <ul className="space-y-1">
-                      {selectedPageResult.result.tldrSummary.map((point, i) => (
+                      {safeGetArray(selectedPageResult.result.tldrSummary).map((point, i) => (
                         <li key={i} className="text-sm p-2 rounded bg-blue-500/10">{point}</li>
                       ))}
                     </ul>
                   </div>
                 )}
-                <div>
-                  <p className="text-sm font-medium mb-2">LSI Keywords</p>
-                  <div className="flex flex-wrap gap-1">
-                    {selectedPageResult.result.contentStrategy.lsiKeywords.map((kw, i) => (
-                      <Badge key={i} variant="secondary">{kw}</Badge>
-                    ))}
+                {safeGetArray(selectedPageResult.result.contentStrategy?.lsiKeywords).length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium mb-2">LSI Keywords</p>
+                    <div className="flex flex-wrap gap-1">
+                      {safeGetArray(selectedPageResult.result.contentStrategy?.lsiKeywords).map((kw, i) => (
+                        <Badge key={i} variant="secondary">{kw}</Badge>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             ) : (
               <p className="text-muted-foreground text-center py-8">No optimization data</p>
@@ -1173,7 +1317,7 @@ export function PageQueue() {
               </div>
               <ScrollArea className="max-h-[300px]">
                 <div className="space-y-2">
-                  {validationResult.checks.map((check, i) => (
+                  {safeGetArray(validationResult.checks).map((check, i) => (
                     <div key={i} className={cn("p-2 rounded-lg text-sm flex items-center justify-between", check.passed ? "bg-green-500/10" : check.severity === 'error' ? "bg-red-500/10" : "bg-yellow-500/10")}>
                       <div className="flex items-center gap-2">
                         {check.passed ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : check.severity === 'error' ? <XCircle className="w-4 h-4 text-red-500" /> : <AlertTriangle className="w-4 h-4 text-yellow-500" />}
@@ -1244,7 +1388,12 @@ export function PageQueue() {
               <p className="text-sm font-medium truncate">{batchProgress.current}</p>
             </div>
             {batchProgress.status === 'complete' && (
-              <Button className="w-full" onClick={() => { setShowBatchDialog(false); setBatchProgress({ total: 0, completed: 0, failed: 0, current: '', status: 'idle' }); }}>Done</Button>
+              <Button className="w-full" onClick={() => { 
+                setShowBatchDialog(false); 
+                const idleProgress: BatchProgress = { total: 0, completed: 0, failed: 0, current: '', status: 'idle' };
+                setBatchProgress(idleProgress);
+                batchProgressRef.current = idleProgress;
+              }}>Done</Button>
             )}
           </div>
         </DialogContent>
@@ -1260,10 +1409,13 @@ export function PageQueue() {
           serverProgress={activeJob?.progress ?? 0}
           serverStepName={activeJob?.currentStep}
           errorMessage={activeJob?.errorMessage}
-          onDismiss={() => { setIsOptimizing(false); setOptimizingPageTitle(''); stopWatching(); }}
+          onDismiss={() => { 
+            setIsOptimizing(false); 
+            setOptimizingPageTitle(''); 
+            stopWatching(); 
+          }}
         />
       )}
     </>
   );
 }
-
