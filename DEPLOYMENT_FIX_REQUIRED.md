@@ -92,3 +92,11 @@ After configuring environment variables, you should see in browser console:
 ❌ **Environment variables are MISSING in Cloudflare Pages**
 
 **ACTION REQUIRED:** Add Supabase environment variables to Cloudflare Pages settings!
+
+
+## UPDATE: REBUILD REQUIRED
+
+After adding environment variables in Cloudflare Pages, you MUST trigger a new deployment!
+Cloudflare does NOT automatically rebuild when env vars are added.
+
+Go to Cloudflare Pages → Deployments → Click "Retry deployment" on the latest build.
