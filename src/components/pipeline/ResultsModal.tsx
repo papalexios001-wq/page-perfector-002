@@ -1,131 +1,156 @@
-'use client';
+// src/components/pipeline/ResultsModal.tsx
+// ============================================================================
+// RESULTS MODAL - Shows optimization results with publish options
+// ============================================================================
 
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Download, Copy, Check, X, TrendingUp } from 'lucide-react';
-import { OptimizationResult } from './QuickOptimizeButton';
+import { X, Copy, Download, Send, FileText, CheckCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 
 interface ResultsModalProps {
-  result: OptimizationResult;
   isOpen: boolean;
   onClose: () => void;
+  result: any;
+  pageId: string;
 }
 
-export const ResultsModal: React.FC<ResultsModalProps> = ({
-  result,
-  isOpen,
-  onClose,
-}) => {
-  const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'seo' | 'recommendations'>('overview');
+export function ResultsModal({ isOpen, onClose, result, pageId }: ResultsModalProps) {
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishStatus, setPublishStatus] = useState<'idle' | 'draft' | 'published'>('idle');
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(result.enhanced.content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  if (!isOpen || !result) return null;
+
+  const handlePublish = async (status: 'draft' | 'publish') => {
+    setIsPublishing(true);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('publish-to-wordpress', {
+        body: {
+          pageId: pageId,
+          title: result.title || result.optimizedTitle || 'Optimized Post',
+          content: result.optimizedContent || '',
+          status: status,
+        },
+      });
+
+      if (error) {
+        throw new Error(error.message || 'Publish failed');
+      }
+
+      if (!data?.success) {
+        throw new Error(data?.error || 'Publish failed');
+      }
+
+      setPublishStatus(status === 'publish' ? 'published' : 'draft');
+      toast.success(status === 'publish' ? 'Published successfully!' : 'Saved as draft!');
+
+    } catch (err) {
+      console.error('[Publish] Error:', err);
+      toast.error(err instanceof Error ? err.message : 'Publish failed');
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
-  const handleDownload = () => {
-    const element = document.createElement('a');
-    const file = new Blob([result.enhanced.content], { type: 'text/plain' });
-    element.href = URL.createObjectURL(file);
-    element.download = 'optimized-content.txt';
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  };
-
-  const renderMetricCard = (label: string, original: number, enhanced: number, icon: string) => {
-    const improvement = enhanced - original;
-    const improvementPercent = ((improvement / Math.max(1, original)) * 100).toFixed(1);
-
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-lg p-4 border border-gray-200"
-      >
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-600">{label}</span>
-          <span className="text-2xl">{icon}</span>
-        </div>
-        <div className="flex items-baseline gap-2 mb-3">
-          <span className="text-gray-400 line-through text-sm">{original.toFixed(1)}</span>
-          <span className="text-2xl font-bold text-gray-900">{enhanced.toFixed(1)}</span>
-        </div>
-        {improvement > 0 && (
-          <div className="flex items-center gap-1 text-green-600 font-semibold">
-            <TrendingUp size={16} />
-            <span>+{improvement.toFixed(1)}</span>
-          </div>
-        )}
-      </motion.div>
-    );
+  const handleCopyContent = () => {
+    const content = result.optimizedContent || '';
+    navigator.clipboard.writeText(content);
+    toast.success('Content copied to clipboard!');
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 bg-black/50 z-40"
-          />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
-          >
-            <div className="w-full max-w-4xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-              <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 px-6 sm:px-8 py-6 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl">\u2728</span>
-                  <div>
-                    <h2 className="text-2xl font-bold text-white">Optimization Complete</h2>
-                    <p className="text-blue-100 text-sm">SOTA enhanced your content</p>
-                  </div>
-                </div>
-                <motion.button
-                  whileHover={{ scale: 1.1 }}
-                  onClick={onClose}
-                  className="text-white hover:bg-white/20 rounded-lg p-2"
-                >
-                  <X size={24} />
-                </motion.button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-6 sm:p-8 space-y-6">
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Quality Score</h3>
-                  <div className="text-4xl font-bold text-green-600">+{Math.round(result.improvements.overall)} points</div>
-                </motion.div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {renderMetricCard('Readability', result.original.metrics.readability, result.enhanced.metrics.readability, '📖')}
-                  {renderMetricCard('SEO', result.original.metrics.seoScore, result.enhanced.metrics.seoScore, '🔍')}
-                </div>
-              </div>
-              <div className="border-t border-gray-200 bg-gray-50 px-6 sm:px-8 py-4 flex gap-3 justify-end">
-                <motion.button whileHover={{ scale: 1.05 }} onClick={onClose} className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium">
-                  Close
-                </motion.button>
-                <motion.button whileHover={{ scale: 1.05 }} onClick={handleCopy} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium">
-                  {copied ? <Check size={18} /> : <Copy size={18} />}
-                  {copied ? 'Copied!' : 'Copy'}
-                </motion.button>
-                <motion.button whileHover={{ scale: 1.05 }} onClick={handleDownload} className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium">
-                  <Download size={18} />
-                  Download
-                </motion.button>
-              </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="relative w-full max-w-4xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold">Optimization Results</h2>
+              <p className="text-blue-100 mt-1">{result.title || 'Optimized Content'}</p>
             </div>
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-white/20 rounded-full transition-colors"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+          {/* Metrics */}
+          <div className="flex gap-4 mt-4">
+            <Badge className="bg-white/20 text-white hover:bg-white/30">
+              Quality: {result.qualityScore || 'N/A'}/100
+            </Badge>
+            <Badge className="bg-white/20 text-white hover:bg-white/30">
+              SEO: {result.seoScore || 'N/A'}/100
+            </Badge>
+            <Badge className="bg-white/20 text-white hover:bg-white/30">
+              Words: {result.wordCount || 'N/A'}
+            </Badge>
+            <Badge className="bg-white/20 text-white hover:bg-white/30">
+              Sections: {result.sections?.length || 0}
+            </Badge>
+          </div>
+        </div>
+
+        {/* Content Preview */}
+        <div className="p-6 overflow-y-auto max-h-[50vh]">
+          <div 
+            className="prose prose-lg max-w-none"
+            dangerouslySetInnerHTML={{ __html: result.optimizedContent || '<p>No content generated</p>' }}
+          />
+        </div>
+
+        {/* Actions */}
+        <div className="sticky bottom-0 bg-gray-50 border-t p-6">
+          <div className="flex items-center justify-between">
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={handleCopyContent}
+              >
+                <Copy className="w-4 h-4 mr-2" />
+                Copy HTML
+              </Button>
+            </div>
+
+            <div className="flex gap-2">
+              {publishStatus === 'idle' ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => handlePublish('draft')}
+                    disabled={isPublishing}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    {isPublishing ? 'Saving...' : 'Save as Draft'}
+                  </Button>
+                  <Button
+                    onClick={() => handlePublish('publish')}
+                    disabled={isPublishing}
+                    className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
+                  >
+                    <Send className="w-4 h-4 mr-2" />
+                    {isPublishing ? 'Publishing...' : 'Publish Now'}
+                  </Button>
+                </>
+              ) : (
+                <div className="flex items-center gap-2 text-green-600">
+                  <CheckCircle className="w-5 h-5" />
+                  <span className="font-semibold">
+                    {publishStatus === 'published' ? 'Published!' : 'Saved as Draft!'}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
-};
+}
 
 export default ResultsModal;
