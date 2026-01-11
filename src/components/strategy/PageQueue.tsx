@@ -79,6 +79,26 @@ interface OptimizationResult {
   confidenceLevel?: number;
 }
 
+// ============================================================================
+// OLD EDGE FUNCTION FORMAT (BlogPostContent)
+// ============================================================================
+interface BlogPostSection {
+  type: string;
+  content?: string;
+  data?: unknown;
+}
+
+interface BlogPostContent {
+  title?: string;
+  author?: string;
+  publishedAt?: string;
+  excerpt?: string;
+  qualityScore?: number;
+  wordCount?: number;
+  metaDescription?: string;
+  sections?: BlogPostSection[];
+}
+
 interface ValidationCheck {
   name: string;
   passed: boolean;
@@ -116,6 +136,113 @@ function safeGetNumber(val: number | undefined | null, defaultVal: number = 0): 
 
 function safeGetString(val: string | undefined | null, defaultVal: string = ''): string {
   return typeof val === 'string' ? val : defaultVal;
+}
+
+// ============================================================================
+// FORMAT CONVERTER: Detect and normalize result format
+// ============================================================================
+function normalizeOptimizationResult(rawResult: unknown): OptimizationResult {
+  if (!rawResult || typeof rawResult !== 'object') {
+    return {
+      optimizedTitle: '',
+      metaDescription: '',
+      h2s: [],
+      qualityScore: 0,
+      contentStrategy: { wordCount: 0 },
+    };
+  }
+
+  const result = rawResult as Record<string, unknown>;
+
+  // Check if it's the OLD BlogPostContent format (has `sections` array and `title` but no `optimizedTitle`)
+  const isOldFormat = Array.isArray(result.sections) && result.title && !result.optimizedTitle;
+
+  if (isOldFormat) {
+    console.log('[normalizeOptimizationResult] Detected OLD BlogPostContent format, converting...');
+    const oldResult = result as unknown as BlogPostContent;
+    
+    // Extract H2s from sections
+    const h2s: string[] = [];
+    const tldrSummary: string[] = [];
+    const keyTakeaways: string[] = [];
+    const faqs: Array<{ question: string; answer: string }> = [];
+    let optimizedContent = '';
+
+    for (const section of safeGetArray(oldResult.sections)) {
+      if (section.type === 'heading' && section.content) {
+        h2s.push(section.content);
+      }
+      if (section.type === 'tldr' && section.content) {
+        tldrSummary.push(section.content);
+      }
+      if (section.type === 'takeaways' && Array.isArray(section.data)) {
+        keyTakeaways.push(...(section.data as string[]));
+      }
+      if (section.type === 'paragraph' && section.content) {
+        optimizedContent += `<p>${section.content}</p>\n`;
+      }
+      if (section.type === 'quote' && section.data) {
+        const quote = section.data as { text?: string; author?: string };
+        if (quote.text) {
+          optimizedContent += `<blockquote>${quote.text}${quote.author ? ` — ${quote.author}` : ''}</blockquote>\n`;
+        }
+      }
+    }
+
+    // Convert to new format
+    return {
+      optimizedTitle: oldResult.title || '',
+      metaDescription: oldResult.metaDescription || oldResult.excerpt || '',
+      h1: oldResult.title || '',
+      h2s,
+      optimizedContent,
+      tldrSummary: tldrSummary.length > 0 ? tldrSummary : keyTakeaways.slice(0, 3),
+      keyTakeaways,
+      faqs,
+      contentStrategy: {
+        wordCount: oldResult.wordCount || 0,
+        readabilityScore: 70,
+        keywordDensity: 1.5,
+        lsiKeywords: [],
+      },
+      qualityScore: oldResult.qualityScore || 75,
+      seoScore: oldResult.qualityScore ? Math.round(oldResult.qualityScore * 0.9) : 70,
+      readabilityScore: 70,
+      engagementScore: 70,
+      estimatedRankPosition: 10,
+      confidenceLevel: 75,
+    };
+  }
+
+  // It's already in new OptimizationResult format (or close to it)
+  console.log('[normalizeOptimizationResult] Using new OptimizationResult format');
+  const newResult = result as OptimizationResult;
+
+  return {
+    optimizedTitle: newResult.optimizedTitle || (result.title as string) || '',
+    metaDescription: newResult.metaDescription || '',
+    h1: newResult.h1 || newResult.optimizedTitle || (result.title as string) || '',
+    h2s: safeGetArray(newResult.h2s),
+    optimizedContent: newResult.optimizedContent || '',
+    tldrSummary: safeGetArray(newResult.tldrSummary),
+    keyTakeaways: safeGetArray(newResult.keyTakeaways),
+    faqs: safeGetArray(newResult.faqs),
+    contentStrategy: {
+      wordCount: newResult.contentStrategy?.wordCount || (result.wordCount as number) || 0,
+      readabilityScore: newResult.contentStrategy?.readabilityScore || 70,
+      keywordDensity: newResult.contentStrategy?.keywordDensity || 1.5,
+      lsiKeywords: safeGetArray(newResult.contentStrategy?.lsiKeywords),
+    },
+    internalLinks: safeGetArray(newResult.internalLinks),
+    schema: newResult.schema || {},
+    aiSuggestions: newResult.aiSuggestions || {},
+    qualityScore: newResult.qualityScore || (result.qualityScore as number) || 0,
+    seoScore: newResult.seoScore || 0,
+    readabilityScore: newResult.readabilityScore || 0,
+    engagementScore: newResult.engagementScore || 0,
+    estimatedRankPosition: newResult.estimatedRankPosition || 10,
+    confidenceLevel: newResult.confidenceLevel || 75,
+  };
 }
 
 export function PageQueue() {
@@ -189,8 +316,8 @@ export function PageQueue() {
           const pageToShow = freshPages.find(p => p.id === job.pageId);
           
           if (pageToShow) {
-            // Safely cast and validate the result
-            const optimization = job.result as OptimizationResult;
+            // NORMALIZE the result to handle both old and new formats
+            const optimization = normalizeOptimizationResult(job.result);
             
             setSelectedPageResult({ page: pageToShow, result: optimization });
             setShowResultDialog(true);
@@ -650,9 +777,10 @@ export function PageQueue() {
         return;
       }
 
-      const result = jobData && jobData.length > 0 
-        ? (jobData[0].result as unknown as OptimizationResult | null)
-        : null;
+      const rawResult = jobData && jobData.length > 0 ? jobData[0].result : null;
+      
+      // NORMALIZE the result to handle both old and new formats
+      const result = rawResult ? normalizeOptimizationResult(rawResult) : null;
         
       if (!result) {
         toast.warning('No optimization result found', {
@@ -818,7 +946,9 @@ export function PageQueue() {
           continue;
         }
 
-        const optimization = jobData[0]?.result as unknown as OptimizationResult | null;
+        // NORMALIZE the result
+        const rawResult = jobData[0]?.result;
+        const optimization = rawResult ? normalizeOptimizationResult(rawResult) : null;
 
         if (!optimization) {
           errorCount++;
@@ -1100,7 +1230,9 @@ export function PageQueue() {
                                             .single();
                                           
                                           if (jobData?.result) {
-                                            setSelectedPageResult({ page, result: jobData.result as unknown as OptimizationResult });
+                                            // NORMALIZE the result
+                                            const normalizedResult = normalizeOptimizationResult(jobData.result);
+                                            setSelectedPageResult({ page, result: normalizedResult });
                                             handleValidateAndPublish();
                                           }
                                         } catch (err) {
@@ -1200,7 +1332,7 @@ export function PageQueue() {
         </CardContent>
       </Card>
 
-      {/* Result Dialog - WITH SAFE DATA ACCESS */}
+      {/* Result Dialog - WITH FORMAT NORMALIZATION */}
       <Dialog open={showResultDialog} onOpenChange={setShowResultDialog}>
         <DialogContent className="max-w-2xl max-h-[80vh]">
           <DialogHeader>
@@ -1259,6 +1391,16 @@ export function PageQueue() {
                     <ul className="space-y-1">
                       {safeGetArray(selectedPageResult.result.tldrSummary).map((point, i) => (
                         <li key={i} className="text-sm p-2 rounded bg-blue-500/10">{point}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {safeGetArray(selectedPageResult.result.keyTakeaways).length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium mb-2">Key Takeaways</p>
+                    <ul className="space-y-1">
+                      {safeGetArray(selectedPageResult.result.keyTakeaways).map((takeaway, i) => (
+                        <li key={i} className="text-sm p-2 rounded bg-green-500/10">✓ {takeaway}</li>
                       ))}
                     </ul>
                   </div>
