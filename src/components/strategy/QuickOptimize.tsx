@@ -109,13 +109,11 @@ export function QuickOptimize() {
 
       // Navigate to the optimized blog post page
       setTimeout(() => {
-        console.log('[QuickOptimize] Navigating to:', `/category/:slug/${pageSlug}`);
-        navigate(`/category/:slug/${pageSlug}`);
+        console.log('[QuickOptimize] Navigating to:', `/blog/${pageSlug}`);        navigate(`/category/:slug/${pageSlug}`);
       }, 500);
 
     } catch (err: any) {
-      console.error('[QuickOptimize] Error:', err);
-      
+        navigate(`/blog/${pageSlug}`);      
       addActivityLog({
         type: 'error',
         pageUrl,
