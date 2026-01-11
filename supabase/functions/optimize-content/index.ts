@@ -1,9 +1,8 @@
 // supabase/functions/optimize-content/index.ts
 // ============================================================================
-// ENTERPRISE-GRADE CONTENT OPTIMIZATION ENGINE v6.0
-// FIXED: Duplicate pageId declaration bug
-// FIXED: Quick Optimize compatibility
-// FIXED: Proper data structure for frontend BlogPostRenderer
+// ENTERPRISE-GRADE CONTENT OPTIMIZATION ENGINE v8.0
+// SUPPORTS: Google, OpenRouter, OpenAI, Anthropic, Groq
+// FEATURE: Custom model selection for OpenRouter & Groq
 // ============================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -18,33 +17,26 @@ const corsHeaders = {
 // ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
+type AIProvider = 'google' | 'openai' | 'anthropic' | 'groq' | 'openrouter';
+
 interface OptimizeRequest {
-  // Page identification
   pageId?: string;
   url?: string;
   siteId?: string;
-  
-  // WordPress credentials
   siteUrl?: string;
   username?: string;
   applicationPassword?: string;
-  
-  // AI Configuration
   aiConfig?: {
-    provider: 'openai' | 'anthropic' | 'gemini';
+    provider: AIProvider;
     apiKey: string;
-    model: string;
+    model: string; // Can be ANY model ID for OpenRouter/Groq
   };
-  
-  // NeuronWriter (optional)
   neuronWriter?: {
     enabled: boolean;
     apiKey: string;
     projectId: string;
     projectName?: string;
   };
-  
-  // Advanced settings
   advanced?: {
     targetScore?: number;
     minWordCount?: number;
@@ -56,16 +48,12 @@ interface OptimizeRequest {
     enableKeyTakeaways?: boolean;
     enableCtas?: boolean;
   };
-  
-  // Site context
   siteContext?: {
     organizationName?: string;
     industry?: string;
     targetAudience?: string;
     brandVoice?: string;
   };
-  
-  // Quick optimize specific
   mode?: string;
   postTitle?: string;
 }
@@ -81,26 +69,13 @@ interface WordPressPost {
   type: string;
 }
 
-// Blog post structure that matches frontend BlogPostRenderer
 interface BlogSection {
   type: 'heading' | 'paragraph' | 'tldr' | 'takeaways' | 'quote' | 'cta' | 'video' | 'summary' | 'patent' | 'chart' | 'table';
   content?: string;
   data?: any;
 }
 
-interface BlogPostContent {
-  title: string;
-  author: string;
-  publishedAt: string;
-  excerpt?: string;
-  qualityScore: number;
-  wordCount: number;
-  metaDescription: string;
-  sections: BlogSection[];
-}
-
 interface OptimizationResult {
-  // Blog post format for frontend rendering
   title: string;
   author: string;
   publishedAt: string;
@@ -109,8 +84,6 @@ interface OptimizationResult {
   wordCount: number;
   metaDescription: string;
   sections: BlogSection[];
-  
-  // Legacy fields for backward compatibility
   optimizedTitle: string;
   h1: string;
   h2s: string[];
@@ -139,10 +112,58 @@ interface OptimizationResult {
 }
 
 // ============================================================================
+// AI PROVIDER CONFIGURATIONS
+// DEFAULT_MODELS are only used when NO model is specified
+// Users can enter ANY model ID for OpenRouter and Groq
+// ============================================================================
+const AI_ENDPOINTS: Record<AIProvider, string> = {
+  google: 'https://generativelanguage.googleapis.com/v1beta/models',
+  openai: 'https://api.openai.com/v1/chat/completions',
+  anthropic: 'https://api.anthropic.com/v1/messages',
+  groq: 'https://api.groq.com/openai/v1/chat/completions',
+  openrouter: 'https://openrouter.ai/api/v1/chat/completions',
+};
+
+// Fallback defaults - used ONLY if user doesn't specify a model
+const DEFAULT_MODELS: Record<AIProvider, string> = {
+  google: 'gemini-2.0-flash-exp',
+  openai: 'gpt-4o',
+  anthropic: 'claude-sonnet-4-20250514',
+  groq: 'llama-3.3-70b-versatile',
+  openrouter: 'anthropic/claude-3.5-sonnet',
+};
+
+// ============================================================================
+// POPULAR MODEL SUGGESTIONS (for reference/logging only)
+// Users can use ANY model ID from the provider's catalog
+// ============================================================================
+const POPULAR_OPENROUTER_MODELS = [
+  'anthropic/claude-3.5-sonnet',
+  'anthropic/claude-3-opus',
+  'openai/gpt-4o',
+  'openai/gpt-4-turbo',
+  'google/gemini-pro-1.5',
+  'meta-llama/llama-3.3-70b-instruct',
+  'mistralai/mistral-large',
+  'cohere/command-r-plus',
+  'deepseek/deepseek-chat',
+  'qwen/qwen-2.5-72b-instruct',
+];
+
+const POPULAR_GROQ_MODELS = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-70b-versatile',
+  'llama-3.1-8b-instant',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it',
+  'llama3-70b-8192',
+  'llama3-8b-8192',
+];
+
+// ============================================================================
 // MAIN HANDLER
 // ============================================================================
 serve(async (req: Request) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -156,26 +177,24 @@ serve(async (req: Request) => {
     
     // =========================================================================
     // CRITICAL FIX: Use LET for pageId so it can be reassigned
-    // This fixes the "Identifier 'pageId' has already been declared" error
     // =========================================================================
     const { siteUrl, username, applicationPassword, aiConfig, advanced, siteContext } = body;
-    let pageId = body.pageId; // USE LET, NOT CONST
+    let pageId = body.pageId;
 
     console.log('[optimize-content] ====================================');
     console.log('[optimize-content] Request received');
     console.log('[optimize-content] pageId:', pageId);
     console.log('[optimize-content] url:', body.url);
     console.log('[optimize-content] siteUrl:', siteUrl);
-    console.log('[optimize-content] hasAiConfig:', !!aiConfig);
+    console.log('[optimize-content] AI Provider:', aiConfig?.provider || 'auto-detect');
+    console.log('[optimize-content] AI Model:', aiConfig?.model || 'will use default');
 
     // =========================================================================
     // QUICK OPTIMIZE COMPATIBILITY
-    // If only 'url' is provided (from QuickOptimizeButton), create synthetic page
     // =========================================================================
     if (!pageId && body.url) {
       console.log('[optimize-content] Quick Optimize mode detected - url:', body.url);
       
-      // Fetch site configuration from database
       const { data: sites, error: sitesError } = await supabase
         .from('sites')
         .select('*')
@@ -186,7 +205,6 @@ serve(async (req: Request) => {
         console.log('[optimize-content] No site configured, proceeding with defaults');
       }
       
-      // Create synthetic page entry
       const syntheticPageId = crypto.randomUUID();
       const { error: pageInsertError } = await supabase.from('pages').insert({
         id: syntheticPageId,
@@ -201,10 +219,9 @@ serve(async (req: Request) => {
       
       if (pageInsertError) {
         console.error('[optimize-content] Failed to create page:', pageInsertError);
-        // Continue anyway - we can still generate content
       }
       
-      // CRITICAL FIX: Update the local pageId variable
+      // CRITICAL: Update the local pageId variable
       pageId = syntheticPageId;
       body.pageId = syntheticPageId;
       
@@ -214,28 +231,32 @@ serve(async (req: Request) => {
         body.applicationPassword = sites.wp_app_password;
       }
       
-      // Fetch AI config if available
-      const { data: config } = await supabase
-        .from('configuration')
-        .select('*')
-        .limit(1)
-        .single();
-      
-      if (config?.ai_provider && config?.ai_api_key) {
-        body.aiConfig = {
-          provider: config.ai_provider,
-          apiKey: config.ai_api_key,
-          model: config.ai_model || 'gemini-2.0-flash-exp',
-        };
+      // Fetch AI config from database if not provided
+      if (!body.aiConfig) {
+        const { data: config } = await supabase
+          .from('configuration')
+          .select('*')
+          .limit(1)
+          .single();
+        
+        if (config?.ai_provider && config?.ai_api_key) {
+          body.aiConfig = {
+            provider: config.ai_provider as AIProvider,
+            apiKey: config.ai_api_key,
+            // Use stored model or default - user can override with ANY model ID
+            model: config.ai_model || DEFAULT_MODELS[config.ai_provider as AIProvider],
+          };
+          console.log('[optimize-content] Loaded AI config from DB:', {
+            provider: body.aiConfig.provider,
+            model: body.aiConfig.model,
+          });
+        }
       }
       
       console.log('[optimize-content] Synthetic page created:', syntheticPageId);
     }
-    // =========================================================================
-    // END QUICK OPTIMIZE COMPATIBILITY
-    // =========================================================================
 
-    // Validate pageId exists
+    // Validate pageId
     if (!pageId) {
       console.error('[optimize-content] No pageId after compatibility check');
       return new Response(
@@ -273,7 +294,7 @@ serve(async (req: Request) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-    // Process in background using EdgeRuntime.waitUntil
+    // Process in background
     EdgeRuntime.waitUntil(
       processOptimization(supabase, jobId, pageId, {
         siteUrl: body.siteUrl || siteUrl,
@@ -327,7 +348,7 @@ async function processOptimization(
   };
 
   try {
-    // ========== STAGE 1: GET PAGE DATA FROM DATABASE ==========
+    // ========== STAGE 1: GET PAGE DATA ==========
     await updateProgress(10, 'Loading page data...');
     
     const { data: pageData, error: pageError } = await supabase
@@ -336,25 +357,13 @@ async function processOptimization(
       .eq('id', pageId)
       .single();
 
-    if (pageError || !pageData) {
-      console.error(`[Job ${jobId}] Page not found:`, pageError);
-      // Create a minimal page data object for Quick Optimize
-      const minimalPageData = {
-        id: pageId,
-        url: config.url || '/quick-optimize',
-        slug: config.url?.replace(/^\//, '') || 'quick-optimize',
-        title: config.postTitle || 'Quick Optimize',
-      };
-      console.log(`[Job ${jobId}] Using minimal page data:`, minimalPageData);
-    }
-
     const originalTitle = pageData?.title || config.postTitle || 'Optimized Content';
     const pageUrl = pageData?.url || config.url || '/';
     const pageSlug = pageData?.slug || config.url?.replace(/^\//, '') || 'optimized';
 
     console.log(`[Job ${jobId}] Processing: ${originalTitle}`);
 
-    // ========== STAGE 2: FETCH CONTENT (if WordPress configured) ==========
+    // ========== STAGE 2: FETCH CONTENT ==========
     await updateProgress(20, 'Analyzing content...');
     
     let wpContent: WordPressPost | null = null;
@@ -376,7 +385,7 @@ async function processOptimization(
       }
     }
 
-    // ========== STAGE 3: PREPARE FOR AI GENERATION ==========
+    // ========== STAGE 3: PREPARE AI GENERATION ==========
     await updateProgress(35, 'Preparing AI generation...');
     
     const plainText = stripHtml(originalContent);
@@ -384,36 +393,59 @@ async function processOptimization(
     
     console.log(`[Job ${jobId}] Original word count: ${wordCount}`);
 
-    // ========== STAGE 4: GENERATE OPTIMIZED CONTENT ==========
+    // ========== STAGE 4: GENERATE CONTENT WITH AI ==========
     await updateProgress(50, 'AI is generating optimized content...');
     
     let result: OptimizationResult;
     
-    // Try AI generation
-    const geminiKey = Deno.env.get('GEMINI_API_KEY');
+    // Determine which AI to use
+    const aiProvider = config.aiConfig?.provider;
+    const aiApiKey = config.aiConfig?.apiKey;
+    // CRITICAL: Use the EXACT model specified by user (supports custom models)
+    const aiModel = config.aiConfig?.model;
     
-    if (config.aiConfig?.apiKey) {
+    // Environment fallback keys
+    const geminiKey = Deno.env.get('GEMINI_API_KEY');
+    const openaiKey = Deno.env.get('OPENAI_API_KEY');
+    const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
+    const groqKey = Deno.env.get('GROQ_API_KEY');
+    const openrouterKey = Deno.env.get('OPENROUTER_API_KEY');
+
+    if (aiApiKey && aiProvider) {
+      // Use configured AI with user-specified model
+      const modelToUse = aiModel || DEFAULT_MODELS[aiProvider];
+      
       try {
-        console.log(`[Job ${jobId}] Using configured AI: ${config.aiConfig.provider}`);
+        console.log(`[Job ${jobId}] ========================================`);
+        console.log(`[Job ${jobId}] Using AI Provider: ${aiProvider.toUpperCase()}`);
+        console.log(`[Job ${jobId}] Model: ${modelToUse}`);
+        console.log(`[Job ${jobId}] (Custom model support: ${aiProvider === 'openrouter' || aiProvider === 'groq' ? 'YES' : 'NO'})`);
+        console.log(`[Job ${jobId}] ========================================`);
+        
         result = await generateWithAI(
-          config.aiConfig,
+          aiProvider,
+          aiApiKey,
+          modelToUse,
           originalTitle,
           plainText || `Content about ${originalTitle}`,
           pageUrl,
           config.siteContext,
           config.advanced
         );
-        await updateProgress(75, 'AI generation complete!');
+        await updateProgress(75, `AI generation complete! (${aiProvider}/${modelToUse})`);
       } catch (aiError) {
-        console.error(`[Job ${jobId}] Configured AI failed:`, aiError);
+        console.error(`[Job ${jobId}] ${aiProvider} AI failed:`, aiError);
         await updateProgress(60, 'AI failed, using fallback...');
         result = generateEnterpriseContent(originalTitle, plainText, pageUrl, config.advanced);
       }
     } else if (geminiKey) {
+      // Fallback to environment Gemini
       try {
         console.log(`[Job ${jobId}] Using environment Gemini API`);
         result = await generateWithAI(
-          { provider: 'gemini', apiKey: geminiKey, model: 'gemini-2.0-flash-exp' },
+          'google',
+          geminiKey,
+          'gemini-2.0-flash-exp',
           originalTitle,
           plainText || `Content about ${originalTitle}`,
           pageUrl,
@@ -425,7 +457,84 @@ async function processOptimization(
         console.error(`[Job ${jobId}] Gemini failed:`, aiError);
         result = generateEnterpriseContent(originalTitle, plainText, pageUrl, config.advanced);
       }
+    } else if (openrouterKey) {
+      // Fallback to environment OpenRouter
+      try {
+        console.log(`[Job ${jobId}] Using environment OpenRouter API`);
+        result = await generateWithAI(
+          'openrouter',
+          openrouterKey,
+          'anthropic/claude-3.5-sonnet',
+          originalTitle,
+          plainText || `Content about ${originalTitle}`,
+          pageUrl,
+          config.siteContext,
+          config.advanced
+        );
+        await updateProgress(75, 'AI generation complete!');
+      } catch (aiError) {
+        console.error(`[Job ${jobId}] OpenRouter failed:`, aiError);
+        result = generateEnterpriseContent(originalTitle, plainText, pageUrl, config.advanced);
+      }
+    } else if (groqKey) {
+      // Fallback to environment Groq
+      try {
+        console.log(`[Job ${jobId}] Using environment Groq API`);
+        result = await generateWithAI(
+          'groq',
+          groqKey,
+          'llama-3.3-70b-versatile',
+          originalTitle,
+          plainText || `Content about ${originalTitle}`,
+          pageUrl,
+          config.siteContext,
+          config.advanced
+        );
+        await updateProgress(75, 'AI generation complete!');
+      } catch (aiError) {
+        console.error(`[Job ${jobId}] Groq failed:`, aiError);
+        result = generateEnterpriseContent(originalTitle, plainText, pageUrl, config.advanced);
+      }
+    } else if (openaiKey) {
+      // Fallback to environment OpenAI
+      try {
+        console.log(`[Job ${jobId}] Using environment OpenAI API`);
+        result = await generateWithAI(
+          'openai',
+          openaiKey,
+          'gpt-4o',
+          originalTitle,
+          plainText || `Content about ${originalTitle}`,
+          pageUrl,
+          config.siteContext,
+          config.advanced
+        );
+        await updateProgress(75, 'AI generation complete!');
+      } catch (aiError) {
+        console.error(`[Job ${jobId}] OpenAI failed:`, aiError);
+        result = generateEnterpriseContent(originalTitle, plainText, pageUrl, config.advanced);
+      }
+    } else if (anthropicKey) {
+      // Fallback to environment Anthropic
+      try {
+        console.log(`[Job ${jobId}] Using environment Anthropic API`);
+        result = await generateWithAI(
+          'anthropic',
+          anthropicKey,
+          'claude-sonnet-4-20250514',
+          originalTitle,
+          plainText || `Content about ${originalTitle}`,
+          pageUrl,
+          config.siteContext,
+          config.advanced
+        );
+        await updateProgress(75, 'AI generation complete!');
+      } catch (aiError) {
+        console.error(`[Job ${jobId}] Anthropic failed:`, aiError);
+        result = generateEnterpriseContent(originalTitle, plainText, pageUrl, config.advanced);
+      }
     } else {
+      // No AI configured - use enterprise fallback
       console.log(`[Job ${jobId}] No AI configured, using enterprise content generation`);
       result = generateEnterpriseContent(originalTitle, plainText, pageUrl, config.advanced);
     }
@@ -433,12 +542,10 @@ async function processOptimization(
     // ========== STAGE 5: POST-PROCESSING ==========
     await updateProgress(85, 'Applying SEO optimizations...');
     
-    // Generate schema markup
     result.schema = generateSchema(result.title, result.metaDescription, pageUrl);
 
     await updateProgress(92, 'Validating quality...');
     
-    // Calculate final scores
     result.seoScore = calculateSeoScore(result);
     result.readabilityScore = calculateReadabilityScore(result.optimizedContent);
     result.engagementScore = Math.round((result.seoScore + result.readabilityScore) / 2);
@@ -449,7 +556,6 @@ async function processOptimization(
     // ========== STAGE 6: SAVE RESULTS ==========
     await updateProgress(96, 'Saving results...');
 
-    // Update page status
     await supabase.from('pages').update({
       status: 'completed',
       score_after: { overall: result.qualityScore, seo: result.seoScore, readability: result.readabilityScore },
@@ -457,7 +563,6 @@ async function processOptimization(
       updated_at: new Date().toISOString(),
     }).eq('id', pageId);
 
-    // Complete job with result
     const { error: completeError } = await supabase.from('jobs').update({
       status: 'completed',
       progress: 100,
@@ -534,10 +639,12 @@ async function fetchWordPressPost(
 }
 
 // ============================================================================
-// AI GENERATION (OpenAI, Anthropic, Gemini)
+// UNIFIED AI GENERATION - SUPPORTS ALL 5 PROVIDERS WITH CUSTOM MODELS
 // ============================================================================
 async function generateWithAI(
-  aiConfig: { provider: string; apiKey: string; model: string },
+  provider: AIProvider,
+  apiKey: string,
+  model: string, // Can be ANY model ID - custom models supported for OpenRouter/Groq
   originalTitle: string,
   originalContent: string,
   pageUrl: string,
@@ -547,7 +654,261 @@ async function generateWithAI(
   
   const targetWordCount = advanced?.maxWordCount || 2500;
   
-  const prompt = `You are an expert SEO content optimizer and blog writer. Create a comprehensive, engaging blog post.
+  const prompt = buildOptimizationPrompt(
+    originalTitle,
+    originalContent,
+    pageUrl,
+    siteContext,
+    targetWordCount
+  );
+
+  console.log(`[AI] ========================================`);
+  console.log(`[AI] Provider: ${provider.toUpperCase()}`);
+  console.log(`[AI] Model: ${model}`);
+  console.log(`[AI] Target words: ${targetWordCount}`);
+  console.log(`[AI] ========================================`);
+
+  let text: string;
+
+  switch (provider) {
+    case 'openai':
+      text = await callOpenAI(apiKey, model, prompt);
+      break;
+    case 'anthropic':
+      text = await callAnthropic(apiKey, model, prompt);
+      break;
+    case 'groq':
+      // GROQ: Supports ANY model from their catalog
+      // Examples: llama-3.3-70b-versatile, mixtral-8x7b-32768, gemma2-9b-it
+      console.log(`[AI] Groq custom model support: User selected "${model}"`);
+      text = await callGroq(apiKey, model, prompt);
+      break;
+    case 'openrouter':
+      // OPENROUTER: Supports ANY model from 100+ providers
+      // Examples: anthropic/claude-3.5-sonnet, openai/gpt-4o, meta-llama/llama-3.3-70b-instruct
+      console.log(`[AI] OpenRouter custom model support: User selected "${model}"`);
+      text = await callOpenRouter(apiKey, model, prompt);
+      break;
+    case 'google':
+    default:
+      text = await callGemini(apiKey, model, prompt);
+      break;
+  }
+
+  if (!text) {
+    throw new Error(`No content returned from ${provider} (model: ${model})`);
+  }
+
+  console.log(`[AI] ✅ Received response from ${provider}/${model}, parsing JSON...`);
+
+  // Parse JSON from response
+  const cleanJson = text
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/gi, '')
+    .trim();
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(cleanJson);
+  } catch (parseError) {
+    console.error(`[AI] JSON parse error from ${provider}/${model}:`, parseError);
+    console.error('[AI] Raw text (first 500 chars):', cleanJson.slice(0, 500));
+    throw new Error(`Failed to parse ${provider}/${model} response as JSON`);
+  }
+
+  return normalizeAIResponse(parsed, originalTitle, targetWordCount);
+}
+
+// ============================================================================
+// PROVIDER-SPECIFIC API CALLS
+// ============================================================================
+
+async function callGemini(apiKey: string, model: string, prompt: string): Promise<string> {
+  console.log(`[Gemini] Calling model: ${model}`);
+  
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Gemini error (${model}): ${response.status} - ${error}`);
+  }
+
+  const data = await response.json();
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+async function callOpenAI(apiKey: string, model: string, prompt: string): Promise<string> {
+  console.log(`[OpenAI] Calling model: ${model}`);
+  
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 8000,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`OpenAI error (${model}): ${response.status} - ${error}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function callAnthropic(apiKey: string, model: string, prompt: string): Promise<string> {
+  console.log(`[Anthropic] Calling model: ${model}`);
+  
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: model,
+      max_tokens: 8000,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Anthropic error (${model}): ${response.status} - ${error}`);
+  }
+
+  const data = await response.json();
+  return data.content?.[0]?.text || '';
+}
+
+/**
+ * GROQ API - Supports ANY model from their catalog
+ * Browse models: https://console.groq.com/docs/models
+ * 
+ * Popular models:
+ * - llama-3.3-70b-versatile (recommended)
+ * - llama-3.1-70b-versatile
+ * - llama-3.1-8b-instant (fastest)
+ * - mixtral-8x7b-32768
+ * - gemma2-9b-it
+ */
+async function callGroq(apiKey: string, model: string, prompt: string): Promise<string> {
+  console.log(`[Groq] Calling model: ${model}`);
+  console.log(`[Groq] Note: Any model from console.groq.com/docs/models is supported`);
+  
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: model, // User can specify ANY Groq model
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 8000,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    console.error(`[Groq] API Error for model "${model}":`, error);
+    throw new Error(`Groq error (${model}): ${response.status} - ${error}`);
+  }
+
+  const data = await response.json();
+  console.log(`[Groq] ✅ Successfully called model: ${model}`);
+  return data.choices?.[0]?.message?.content || '';
+}
+
+/**
+ * OPENROUTER API - Supports 100+ models from multiple providers
+ * Browse models: https://openrouter.ai/models
+ * 
+ * Model ID format: provider/model-name
+ * Examples:
+ * - anthropic/claude-3.5-sonnet
+ * - openai/gpt-4o
+ * - google/gemini-pro-1.5
+ * - meta-llama/llama-3.3-70b-instruct
+ * - mistralai/mistral-large
+ * - cohere/command-r-plus
+ * - deepseek/deepseek-chat
+ */
+async function callOpenRouter(apiKey: string, model: string, prompt: string): Promise<string> {
+  console.log(`[OpenRouter] Calling model: ${model}`);
+  console.log(`[OpenRouter] Note: Any model from openrouter.ai/models is supported`);
+  
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://page-perfector.com',
+      'X-Title': 'Page Perfector Content Optimizer',
+    },
+    body: JSON.stringify({
+      model: model, // User can specify ANY OpenRouter model
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 8000,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    console.error(`[OpenRouter] API Error for model "${model}":`, error);
+    
+    // Provide helpful error message for common issues
+    if (response.status === 404) {
+      throw new Error(`OpenRouter model "${model}" not found. Check available models at openrouter.ai/models`);
+    } else if (response.status === 402) {
+      throw new Error(`OpenRouter: Insufficient credits for model "${model}". Top up at openrouter.ai`);
+    }
+    
+    throw new Error(`OpenRouter error (${model}): ${response.status} - ${error}`);
+  }
+
+  const data = await response.json();
+  console.log(`[OpenRouter] ✅ Successfully called model: ${model}`);
+  
+  // Log usage info if available
+  if (data.usage) {
+    console.log(`[OpenRouter] Tokens used: ${data.usage.total_tokens || 'N/A'}`);
+  }
+  
+  return data.choices?.[0]?.message?.content || '';
+}
+
+// ============================================================================
+// PROMPT BUILDER
+// ============================================================================
+function buildOptimizationPrompt(
+  originalTitle: string,
+  originalContent: string,
+  pageUrl: string,
+  siteContext?: OptimizeRequest['siteContext'],
+  targetWordCount: number = 2500
+): string {
+  return `You are an expert SEO content optimizer and blog writer. Create a comprehensive, engaging blog post.
 
 TOPIC: ${originalTitle}
 URL: ${pageUrl}
@@ -660,105 +1021,17 @@ IMPORTANT:
 - Each "heading" should be followed by 2-4 "paragraph" sections
 - Make content genuinely useful and actionable
 - Return ONLY the JSON, no markdown code blocks`;
+}
 
-  let response: Response;
-  let text: string;
-
-  console.log(`[AI] Calling ${aiConfig.provider} API...`);
-
-  if (aiConfig.provider === 'openai') {
-    response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${aiConfig.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: aiConfig.model || 'gpt-4o',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 8000,
-        temperature: 0.7,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json();
-    text = data.choices?.[0]?.message?.content || '';
-
-  } else if (aiConfig.provider === 'anthropic') {
-    response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': aiConfig.apiKey,
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: aiConfig.model || 'claude-3-5-sonnet-20241022',
-        max_tokens: 8000,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Anthropic error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json();
-    text = data.content?.[0]?.text || '';
-
-  } else {
-    // Gemini (default)
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${aiConfig.model || 'gemini-2.0-flash-exp'}:generateContent?key=${aiConfig.apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Gemini error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json();
-    text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  }
-
-  if (!text) {
-    throw new Error('No content returned from AI');
-  }
-
-  console.log(`[AI] Received response, parsing JSON...`);
-
-  // Parse JSON from response
-  const cleanJson = text
-    .replace(/```json\s*/gi, '')
-    .replace(/```\s*/gi, '')
-    .trim();
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(cleanJson);
-  } catch (parseError) {
-    console.error('[AI] JSON parse error:', parseError);
-    console.error('[AI] Raw text:', cleanJson.slice(0, 500));
-    throw new Error('Failed to parse AI response as JSON');
-  }
-
-  // Ensure all required fields exist
+// ============================================================================
+// NORMALIZE AI RESPONSE
+// ============================================================================
+function normalizeAIResponse(
+  parsed: any, 
+  originalTitle: string, 
+  targetWordCount: number
+): OptimizationResult {
   const result: OptimizationResult = {
-    // Primary fields for BlogPostRenderer
     title: parsed.title || originalTitle,
     author: parsed.author || 'Content Expert',
     publishedAt: parsed.publishedAt || new Date().toISOString(),
@@ -767,8 +1040,6 @@ IMPORTANT:
     wordCount: parsed.wordCount || parsed.contentStrategy?.wordCount || targetWordCount,
     metaDescription: parsed.metaDescription || parsed.excerpt || '',
     sections: Array.isArray(parsed.sections) ? parsed.sections : [],
-    
-    // Legacy fields
     optimizedTitle: parsed.title || originalTitle,
     h1: parsed.h1 || parsed.title || originalTitle,
     h2s: Array.isArray(parsed.h2s) ? parsed.h2s : [],
@@ -807,13 +1078,13 @@ IMPORTANT:
     ];
   }
 
-  console.log(`[AI] ✅ Generated content with ${result.sections.length} sections`);
+  console.log(`[AI] ✅ Normalized content with ${result.sections.length} sections`);
   
   return result;
 }
 
 // ============================================================================
-// ENTERPRISE CONTENT GENERATION (Fallback when no AI available)
+// ENTERPRISE CONTENT GENERATION (Fallback)
 // ============================================================================
 function generateEnterpriseContent(
   originalTitle: string,
@@ -826,22 +1097,18 @@ function generateEnterpriseContent(
   const wordCount = originalContent ? originalContent.split(/\s+/).filter(Boolean).length : 0;
   const targetWordCount = Math.max(wordCount, advanced?.minWordCount || 1500);
   
-  // Extract keywords from title
   const keywords = originalTitle
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, '')
     .split(/\s+/)
     .filter(w => w.length > 3);
 
-  // Generate optimized title
   const optimizedTitle = originalTitle.length > 60 
     ? originalTitle.slice(0, 57) + '...' 
     : originalTitle;
 
-  // Generate meta description
   const metaDescription = `Discover everything you need to know about ${originalTitle.toLowerCase()}. Expert insights, actionable strategies, and proven tips for success.`.slice(0, 155);
 
-  // Generate comprehensive sections
   const sections: BlogSection[] = [
     {
       type: 'tldr',
@@ -854,7 +1121,7 @@ function generateEnterpriseContent(
         'Start with a clear strategy before implementation',
         'Measure your results and iterate based on data',
         'Focus on quality over quantity for lasting results',
-        'Stay updated with the latest industry trends and best practices'
+        'Stay updated with the latest industry trends'
       ]
     },
     {
@@ -887,7 +1154,7 @@ function generateEnterpriseContent(
     },
     {
       type: 'paragraph',
-      content: `<strong>First</strong>, establish clear objectives and metrics for success. <strong>Second</strong>, develop a systematic approach that can be refined over time. <strong>Third</strong>, invest in continuous learning and skill development.`
+      content: `<strong>First</strong>, establish clear objectives and metrics. <strong>Second</strong>, develop a systematic approach that can be refined over time. <strong>Third</strong>, invest in continuous learning and skill development.`
     },
     {
       type: 'heading',
@@ -896,10 +1163,6 @@ function generateEnterpriseContent(
     {
       type: 'paragraph',
       content: `Many people make avoidable mistakes when approaching ${originalTitle.toLowerCase()}. By being aware of these pitfalls, you can save time, resources, and frustration on your journey to success.`
-    },
-    {
-      type: 'paragraph',
-      content: `The most common mistake is rushing into implementation without proper planning. Take the time to research, plan, and prepare before taking action. This investment upfront will pay dividends in the long run.`
     },
     {
       type: 'heading',
@@ -913,18 +1176,17 @@ function generateEnterpriseContent(
       type: 'cta',
       data: {
         title: 'Ready to Get Started?',
-        description: `Take the first step toward mastering ${originalTitle.toLowerCase()} today. Our expert resources and guides will help you achieve your goals.`,
+        description: `Take the first step toward mastering ${originalTitle.toLowerCase()} today.`,
         buttonText: 'Start Your Journey',
         buttonLink: '#contact'
       }
     },
     {
       type: 'summary',
-      content: `In this comprehensive guide, we've covered the essential aspects of ${originalTitle}. From understanding the fundamentals to implementing proven strategies and avoiding common mistakes, you now have the knowledge to succeed. Remember that consistent effort and continuous learning are the keys to long-term success.`
+      content: `In this comprehensive guide, we've covered the essential aspects of ${originalTitle}. From understanding the fundamentals to implementing proven strategies and avoiding common mistakes, you now have the knowledge to succeed.`
     }
   ];
 
-  // Generate H2s from sections
   const h2s = sections
     .filter(s => s.type === 'heading')
     .map(s => s.content || '');
@@ -1021,30 +1283,23 @@ function generateSchema(title: string, description: string, url: string): Record
 function calculateSeoScore(result: OptimizationResult): number {
   let score = 50;
   
-  // Title optimization (50-60 chars ideal)
   if (result.title && result.title.length >= 30 && result.title.length <= 60) score += 10;
   else if (result.title && result.title.length > 0) score += 5;
   
-  // Meta description (120-155 chars ideal)
   if (result.metaDescription && result.metaDescription.length >= 120 && result.metaDescription.length <= 155) score += 10;
   else if (result.metaDescription && result.metaDescription.length > 0) score += 5;
   
-  // H2 headings (3+ ideal)
   if (result.h2s && result.h2s.length >= 4) score += 10;
   else if (result.h2s && result.h2s.length >= 2) score += 5;
   
-  // Content length (1500+ words ideal)
   if (result.wordCount >= 2000) score += 10;
   else if (result.wordCount >= 1000) score += 5;
   
-  // LSI keywords
   if (result.contentStrategy?.lsiKeywords?.length >= 5) score += 5;
   else if (result.contentStrategy?.lsiKeywords?.length >= 2) score += 3;
   
-  // FAQs present
   if (result.faqs && result.faqs.length >= 3) score += 5;
   
-  // Sections present (for rich content)
   if (result.sections && result.sections.length >= 8) score += 10;
   else if (result.sections && result.sections.length >= 4) score += 5;
   
@@ -1059,13 +1314,12 @@ function calculateReadabilityScore(content: string): number {
   const words = plainText.split(/\s+/).filter(Boolean).length;
   const avgWordsPerSentence = words / Math.max(1, sentences);
   
-  // Ideal: 15-20 words per sentence
   if (avgWordsPerSentence >= 12 && avgWordsPerSentence <= 22) {
     return 82;
   } else if (avgWordsPerSentence < 12) {
-    return 75; // Sentences too short (choppy)
+    return 75;
   } else if (avgWordsPerSentence > 30) {
-    return 55; // Sentences too long
+    return 55;
   } else {
     return 68;
   }
