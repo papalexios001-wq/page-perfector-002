@@ -1,32 +1,17 @@
 // src/components/pipeline/QuickOptimizeButton.tsx
-// ============================================================================
-// ENTERPRISE-GRADE QUICK OPTIMIZE BUTTON v5.0
-// FIXES: Polling, Progress Tracking, Error Handling
-// ============================================================================
-
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Zap, Loader2, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { ResultsModal } from './ResultsModal';
+import { supabase } from '@/integrations/supabase/client';
 
 interface QuickOptimizeButtonProps {
   url: string;
   title?: string;
   disabled?: boolean;
   onComplete?: (result: any) => void;
-}
-
-interface JobStatus {
-  id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  progress: number;
-  current_step: string;
-  result?: any;
-  error_message?: string;
 }
 
 export function QuickOptimizeButton({ 
@@ -44,14 +29,20 @@ export function QuickOptimizeButton({
   const [showResults, setShowResults] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const timeIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const pollingActiveRef = useRef(false);
-  const startTimeRef = useRef<number>(0);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isPollingRef = useRef(false);
+  const startTimeRef = useRef(0);
 
-  // Cleanup function
-  const cleanup = useCallback(() => {
-    pollingActiveRef.current = false;
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopPolling();
+    };
+  }, []);
+
+  const stopPolling = () => {
+    isPollingRef.current = false;
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -60,255 +51,248 @@ export function QuickOptimizeButton({
       clearInterval(timeIntervalRef.current);
       timeIntervalRef.current = null;
     }
-  }, []);
+  };
 
-  useEffect(() => {
-    return cleanup;
-  }, [cleanup]);
-
-  // Poll job status
-  const pollJobStatus = useCallback(async (jobIdToCheck: string) => {
-    if (!pollingActiveRef.current) return;
+  const pollJobStatus = async (id: string) => {
+    if (!isPollingRef.current) return;
 
     try {
-      const { data: jobData, error: jobError } = await supabase
+      const { data, error: fetchError } = await supabase
         .from('jobs')
         .select('*')
-        .eq('id', jobIdToCheck)
-        .single();
+        .eq('id', id)
+        .maybeSingle();
 
-      if (jobError) {
-        console.error('[Poll] Error fetching job:', jobError);
+      if (fetchError) {
+        console.error('[Poll] Error:', fetchError);
         return;
       }
 
-      if (!jobData) {
-        console.warn('[Poll] No job data found');
-        return;
-      }
+      if (!data) return;
 
-      console.log(`[Poll] Job ${jobIdToCheck}: ${jobData.progress}% - ${jobData.current_step}`);
+      // Update progress
+      setProgress(data.progress || 0);
+      setCurrentStep(data.current_step || 'Processing...');
 
-      // Update UI
-      setProgress(jobData.progress || 0);
-      setCurrentStep(jobData.current_step || 'Processing...');
-
-      // Handle completion
-      if (jobData.status === 'completed') {
-        console.log('[Poll] Job completed!', jobData.result);
-        cleanup();
+      // Check if completed
+      if (data.status === 'completed') {
+        console.log('[Poll] Completed!');
+        stopPolling();
         setIsOptimizing(false);
-        setResult(jobData.result);
+        setResult(data.result);
         setShowResults(true);
         toast.success('Optimization complete!');
-        onComplete?.(jobData.result);
+        if (onComplete) onComplete(data.result);
       }
 
-      // Handle failure
-      if (jobData.status === 'failed') {
-        console.error('[Poll] Job failed:', jobData.error_message);
-        cleanup();
+      // Check if failed
+      if (data.status === 'failed') {
+        console.error('[Poll] Failed:', data.error_message);
+        stopPolling();
         setIsOptimizing(false);
-        setError(jobData.error_message || 'Optimization failed');
-        toast.error(jobData.error_message || 'Optimization failed');
+        setError(data.error_message || 'Optimization failed');
+        toast.error(data.error_message || 'Optimization failed');
       }
-
     } catch (err) {
       console.error('[Poll] Exception:', err);
     }
-  }, [cleanup, onComplete]);
+  };
 
-  // Start optimization
   const handleOptimize = async () => {
     if (!url) {
-      toast.error('Please enter a URL to optimize');
+      toast.error('Please enter a URL');
       return;
     }
 
     // Reset state
     setIsOptimizing(true);
     setProgress(0);
-    setCurrentStep('Starting optimization...');
+    setCurrentStep('Starting...');
     setError(null);
     setResult(null);
+    setShowResults(false);
     setElapsedTime(0);
     startTimeRef.current = Date.now();
 
-    // Start elapsed time counter
+    // Start timer
     timeIntervalRef.current = setInterval(() => {
       setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
     }, 1000);
 
     try {
-      console.log('[Optimize] Starting for URL:', url);
+      console.log('[Optimize] Starting for:', url);
 
-      // Call the Edge Function
-      const { data, error: fnError } = await supabase.functions.invoke('optimize-content', {
-        body: {
-          url: url,
-          postTitle: title || url,
-        },
-      });
+      // Call Edge Function
+      const { data, error: invokeError } = await supabase.functions.invoke(
+        'optimize-content',
+        {
+          body: { url, postTitle: title || url }
+        }
+      );
 
-      if (fnError) {
-        throw new Error(fnError.message || 'Failed to start optimization');
+      if (invokeError) {
+        throw new Error(invokeError.message || 'Failed to start');
       }
 
-      if (!data?.success || !data?.jobId) {
-        throw new Error(data?.error || 'Invalid response from server');
+      if (!data || !data.success || !data.jobId) {
+        throw new Error(data?.error || 'Invalid response');
       }
 
       console.log('[Optimize] Job created:', data.jobId);
       setJobId(data.jobId);
 
       // Start polling
-      pollingActiveRef.current = true;
+      isPollingRef.current = true;
+      pollJobStatus(data.jobId); // Initial poll
+      
       pollIntervalRef.current = setInterval(() => {
-        if (pollingActiveRef.current) {
-          pollJobStatus(data.jobId);
-        }
-      }, 500); // Poll every 500ms
+        pollJobStatus(data.jobId);
+      }, 1000);
 
-      // Initial poll
-      pollJobStatus(data.jobId);
-
-    } catch (err) {
+    } catch (err: any) {
       console.error('[Optimize] Error:', err);
-      cleanup();
+      stopPolling();
       setIsOptimizing(false);
-      const message = err instanceof Error ? err.message : 'Failed to start optimization';
-      setError(message);
-      toast.error(message);
+      setError(err.message || 'Failed to start');
+      toast.error(err.message || 'Failed to start');
     }
   };
 
-  // Format elapsed time
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  const formatTime = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+  };
+
+  const handleCancel = () => {
+    stopPolling();
+    setIsOptimizing(false);
+    toast.info('Cancelled');
+  };
+
+  const handlePublish = async (status: 'draft' | 'publish') => {
+    if (!result) return;
+
+    try {
+      toast.loading(status === 'publish' ? 'Publishing...' : 'Saving draft...');
+
+      const { data, error: publishError } = await supabase.functions.invoke(
+        'publish-to-wordpress',
+        {
+          body: {
+            pageId: jobId,
+            title: result.title || result.optimizedTitle || 'Optimized Post',
+            content: result.optimizedContent || '',
+            status
+          }
+        }
+      );
+
+      toast.dismiss();
+
+      if (publishError) {
+        throw new Error(publishError.message);
+      }
+
+      if (!data?.success) {
+        throw new Error(data?.error || 'Publish failed');
+      }
+
+      toast.success(status === 'publish' ? 'Published!' : 'Saved as draft!');
+      setShowResults(false);
+
+    } catch (err: any) {
+      toast.dismiss();
+      toast.error(err.message || 'Publish failed');
+    }
   };
 
   return (
-    <>
-      <div className="space-y-4">
-        {/* Optimize Button */}
-        {!isOptimizing && !result && (
-          <Button
-            onClick={handleOptimize}
-            disabled={disabled || !url}
-            className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold py-3 shadow-lg"
-          >
-            <Zap className="w-5 h-5 mr-2" />
-            Quick Optimize
-          </Button>
-        )}
-
-        {/* Progress UI */}
-        {isOptimizing && (
-          <div className="space-y-4 p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
-                <span className="font-semibold text-blue-900">Optimizing Content</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-blue-600">
-                <Clock className="w-4 h-4" />
-                {formatTime(elapsedTime)}
-              </div>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-blue-700">{currentStep}</span>
-                <span className="font-semibold text-blue-900">{progress}%</span>
-              </div>
-              <Progress value={progress} className="h-3 bg-blue-100" />
-            </div>
-
-            {/* Cancel Button */}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                cleanup();
-                setIsOptimizing(false);
-                toast.info('Optimization cancelled');
-              }}
-              className="w-full"
-            >
-              Cancel
-            </Button>
-          </div>
-        )}
-
-        {/* Error Display */}
-        {error && !isOptimizing && (
-          <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
-            <div className="flex items-center gap-2 text-red-700">
-              <XCircle className="w-5 h-5" />
-              <span className="font-semibold">Optimization Failed</span>
-            </div>
-            <p className="mt-2 text-sm text-red-600">{error}</p>
-            <Button
-              onClick={handleOptimize}
-              variant="outline"
-              size="sm"
-              className="mt-3"
-            >
-              Try Again
-            </Button>
-          </div>
-        )}
-
-        {/* Success Display */}
-        {result && !isOptimizing && (
-          <div className="p-4 bg-green-50 border border-green-200 rounded-xl">
-            <div className="flex items-center gap-2 text-green-700">
-              <CheckCircle className="w-5 h-5" />
-              <span className="font-semibold">Optimization Complete!</span>
-            </div>
-            <div className="mt-3 flex gap-2">
-              <Badge variant="secondary">
-                Score: {result.qualityScore || 'N/A'}
-              </Badge>
-              <Badge variant="secondary">
-                Words: {result.wordCount || 'N/A'}
-              </Badge>
-            </div>
-            <div className="mt-3 flex gap-2">
-              <Button
-                onClick={() => setShowResults(true)}
-                size="sm"
-              >
-                View Results
-              </Button>
-              <Button
-                onClick={() => {
-                  setResult(null);
-                  setError(null);
-                }}
-                variant="outline"
-                size="sm"
-              >
-                Optimize Another
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Results Modal */}
-      {showResults && result && (
-        <ResultsModal
-          isOpen={showResults}
-          onClose={() => setShowResults(false)}
-          result={result}
-          pageId={jobId || ''}
-        />
+    <div className="space-y-4">
+      {/* Main Button */}
+      {!isOptimizing && !result && (
+        <Button
+          onClick={handleOptimize}
+          disabled={disabled || !url}
+          className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold py-3"
+        >
+          <Zap className="w-5 h-5 mr-2" />
+          Quick Optimize
+        </Button>
       )}
-    </>
+
+      {/* Progress UI */}
+      {isOptimizing && (
+        <div className="p-4 bg-blue-50 rounded-xl border border-blue-200 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+              <span className="font-semibold text-blue-900">Optimizing...</span>
+            </div>
+            <div className="flex items-center gap-1 text-sm text-blue-600">
+              <Clock className="w-4 h-4" />
+              {formatTime(elapsedTime)}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-blue-700">{currentStep}</span>
+              <span className="font-semibold text-blue-900">{progress}%</span>
+            </div>
+            <Progress value={progress} className="h-3" />
+          </div>
+
+          <Button variant="outline" size="sm" onClick={handleCancel} className="w-full">
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && !isOptimizing && (
+        <div className="p-4 bg-red-50 rounded-xl border border-red-200">
+          <div className="flex items-center gap-2 text-red-700">
+            <XCircle className="w-5 h-5" />
+            <span className="font-semibold">Failed</span>
+          </div>
+          <p className="mt-2 text-sm text-red-600">{error}</p>
+          <Button variant="outline" size="sm" onClick={handleOptimize} className="mt-3">
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {/* Results */}
+      {showResults && result && (
+        <div className="p-4 bg-green-50 rounded-xl border border-green-200">
+          <div className="flex items-center gap-2 text-green-700">
+            <CheckCircle className="w-5 h-5" />
+            <span className="font-semibold">Complete!</span>
+          </div>
+          <div className="mt-2 flex gap-2">
+            <Badge>Score: {result.qualityScore || 'N/A'}</Badge>
+            <Badge>Words: {result.wordCount || 'N/A'}</Badge>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => handlePublish('draft')}>
+              Save Draft
+            </Button>
+            <Button size="sm" onClick={() => handlePublish('publish')}>
+              Publish
+            </Button>
+          </div>
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={() => { setResult(null); setShowResults(false); setError(null); }}
+            className="mt-2 w-full"
+          >
+            Optimize Another
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
