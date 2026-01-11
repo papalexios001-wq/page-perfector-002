@@ -34,12 +34,53 @@ export interface InvokeOptions {
   timeoutMs?: number;
 }
 
+// NEW: Support object-based invocation format
+export interface InvokeEdgeFunctionParams {
+  functionName: string;
+  body: Record<string, unknown>;
+  options?: InvokeOptions;
+}
+
 export async function invokeEdgeFunction<T = unknown>(
-  functionName: string,
-  body: Record<string, unknown>,
-  options?: InvokeOptions
+  paramsOrFunctionName: InvokeEdgeFunctionParams | string,
+  bodyOrOptions?: Record<string, unknown> | InvokeOptions,
+  legacyOptions?: InvokeOptions
 ): Promise<EdgeFunctionResult<T>> {
+  
+  // Handle both calling conventions:
+  // 1. invokeEdgeFunction({ functionName, body, options })
+  // 2. invokeEdgeFunction(functionName, body, options)
+  let functionName: string;
+  let body: Record<string, unknown>;
+  let options: InvokeOptions | undefined;
+
+  if (typeof paramsOrFunctionName === 'object' && 'functionName' in paramsOrFunctionName) {
+    // Object-based invocation
+    functionName = paramsOrFunctionName.functionName;
+    body = paramsOrFunctionName.body;
+    options = paramsOrFunctionName.options;
+    console.log('[invokeEdgeFunction] Using object-based invocation for:', functionName);
+  } else if (typeof paramsOrFunctionName === 'string') {
+    // Legacy positional arguments
+    functionName = paramsOrFunctionName;
+    body = (bodyOrOptions as Record<string, unknown>) || {};
+    options = legacyOptions;
+    console.log('[invokeEdgeFunction] Using legacy invocation for:', functionName);
+  } else {
+    console.error('[invokeEdgeFunction] Invalid parameters:', paramsOrFunctionName);
+    return {
+      data: null,
+      error: {
+        message: 'Invalid function invocation parameters',
+        code: 'INVALID_PARAMS',
+      },
+    };
+  }
+
+  console.log('[invokeEdgeFunction] Calling:', functionName, 'with body:', JSON.stringify(body));
+
   if (!isSupabaseConfigured()) {
+    console.error('[invokeEdgeFunction] Supabase not configured!');
     return {
       data: null,
       error: {
@@ -50,9 +91,12 @@ export async function invokeEdgeFunction<T = unknown>(
   }
 
   // Setup timeout with AbortController
-  const timeoutMs = options?.timeoutMs ?? 90000; // 90 second default
+  const timeoutMs = options?.timeoutMs ?? 120000; // 120 second default for AI operations
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = setTimeout(() => {
+    console.error(`[invokeEdgeFunction] Timeout after ${timeoutMs}ms for ${functionName}`);
+    controller.abort();
+  }, timeoutMs);
 
   // Combine with any provided signal
   if (options?.signal) {
@@ -60,6 +104,8 @@ export async function invokeEdgeFunction<T = unknown>(
   }
 
   try {
+    console.log('[invokeEdgeFunction] Making Supabase function call...');
+    
     const { data, error } = await supabase.functions.invoke(functionName, {
       body,
     });
@@ -67,6 +113,7 @@ export async function invokeEdgeFunction<T = unknown>(
     clearTimeout(timeoutId);
 
     if (error) {
+      console.error('[invokeEdgeFunction] Supabase error:', error);
       return {
         data: null,
         error: {
@@ -77,7 +124,9 @@ export async function invokeEdgeFunction<T = unknown>(
       };
     }
 
+    console.log('[invokeEdgeFunction] Success! Data received:', JSON.stringify(data).slice(0, 500));
     return { data: data as T, error: null };
+    
   } catch (err) {
     clearTimeout(timeoutId);
 
@@ -93,7 +142,7 @@ export async function invokeEdgeFunction<T = unknown>(
       };
     }
 
-    console.error(`[invokeEdgeFunction] Error calling ${functionName}:`, err);
+    console.error(`[invokeEdgeFunction] Exception calling ${functionName}:`, err);
     return {
       data: null,
       error: {
