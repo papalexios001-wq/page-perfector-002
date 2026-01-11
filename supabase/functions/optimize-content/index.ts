@@ -121,6 +121,75 @@ serve(async (req: Request) => {
 
     console.log('[optimize-content] Request:', { pageId, siteUrl, hasAiConfig: !!aiConfig });
 
+        // ============= QUICK OPTIMIZE COMPATIBILITY =============
+    // If only 'url' is provided (from QuickOptimizeButton), create synthetic page & fetch config
+    if (!pageId && body.url) {
+      console.log('[optimize-content] Quick Optimize mode detected - url:', body.url);
+      
+      // Fetch site configuration from database
+      const { data: sites, error: sitesError } = await supabase
+        .from('sites')
+        .select('*')
+        .limit(1)
+        .single();
+      
+      if (sitesError || !sites) {
+        return new Response(
+          JSON.stringify({ success: false, error: 'No site configured. Please add WordPress credentials in Configuration tab.' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+        );
+      }
+      
+      // Create synthetic page entry
+      const syntheticPageId = crypto.randomUUID();
+      const { error: pageInsertError } = await supabase.from('pages').insert({
+        id: syntheticPageId,
+        site_id: sites.id,
+        url: body.url,
+        slug: body.url.replace(/^\//, ''),
+        title: `Quick Optimize: ${body.url}`,
+        status: 'pending',
+        type: 'post',
+        created_at: new Date().toISOString(),
+      });
+      
+      if (pageInsertError) {
+        console.error('[optimize-content] Failed to create page:', pageInsertError);
+        return new Response(
+          JSON.stringify({ success: false, error: 'Failed to create page entry' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+        );
+      }
+      
+      // Override body params with fetched config
+      body.pageId = syntheticPageId;
+      body.siteUrl = sites.wp_url;
+      body.username = sites.wp_username;
+      body.applicationPassword = sites.wp_app_password;
+      
+      // Fetch AI config if available
+      const { data: config } = await supabase
+        .from('configuration')
+        .select('*')
+        .limit(1)
+        .single();
+      
+      if (config?.ai_provider && config?.ai_api_key) {
+        body.aiConfig = {
+          provider: config.ai_provider,
+          apiKey: config.ai_api_key,
+          model: config.ai_model || 'gpt-4o',
+        };
+      }
+      
+      console.log('[optimize-content] Synthetic page created:', syntheticPageId);
+    }
+    // ============= END COMPATIBILITY =============
+
+        // Re-extract variables after compatibility layer may have populated them
+    const { pageId, siteUrl, username, applicationPassword, aiConfig, advanced, siteContext } = body;
+
+
     if (!pageId) {
       return new Response(
         JSON.stringify({ success: false, error: 'pageId is required' }),
