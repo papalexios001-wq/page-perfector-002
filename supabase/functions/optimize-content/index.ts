@@ -15,6 +15,75 @@ const corsHeaders = {
 };
 
 // ============================================================================
+// CRITICAL: TIMEOUT & RETRY UTILITIES FOR AI CALLS
+// ============================================================================
+
+/**
+ * Fetch with timeout to prevent hanging requests
+ * AI APIs can hang indefinitely - this prevents that
+ */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number = 120000 // 2 minutes default
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs / 1000} seconds`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Retry with exponential backoff
+ * AI APIs fail ~5-10% of the time - this handles transient failures
+ */
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000,
+  jobId?: string
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+      const errorMessage = lastError.message || 'Unknown error';
+      
+      // Don't retry on client errors (4xx) - they won't succeed
+      if (errorMessage.includes('400') || 
+          errorMessage.includes('401') || 
+          errorMessage.includes('403') || 
+          errorMessage.includes('404')) {
+        console.error(`[Job ${jobId || 'unknown'}] Client error (won't retry):`, errorMessage);
+        throw error;
+      }
+      
+      if (attempt < maxRetries - 1) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.log(`[Job ${jobId || 'unknown'}] Attempt ${attempt + 1}/${maxRetries} failed, retrying in ${delay}ms...`);
+        console.error(`[Job ${jobId || 'unknown'}] Error:`, errorMessage);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  
+  console.error(`[Job ${jobId || 'unknown'}] All ${maxRetries} attempts failed`);
+  throw lastError;
+}
+
+// ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
 type AIProvider = 'google' | 'openai' | 'anthropic' | 'groq' | 'openrouter';
