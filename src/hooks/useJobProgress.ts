@@ -1,163 +1,131 @@
+// src/hooks/useJobProgress.ts
+// ============================================================================
+// JOB PROGRESS HOOK - Real-time job status tracking
+// ============================================================================
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { RealtimeChannel } from '@supabase/supabase-js';
 
-export interface JobProgress {
+interface JobProgress {
   id: string;
-  pageId: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
-  currentStep: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
   progress: number;
-  errorMessage?: string;
-  result?: unknown;
-  startedAt?: string;
-  completedAt?: string;
+  currentStep: string;
+  result?: any;
+  error?: string;
 }
 
 interface UseJobProgressOptions {
-  onComplete?: (job: JobProgress) => void;
-  onError?: (job: JobProgress) => void;
+  pollingInterval?: number;
+  onComplete?: (result: any) => void;
+  onError?: (error: string) => void;
 }
 
-export function useJobProgress(options: UseJobProgressOptions = {}) {
-  const [activeJob, setActiveJob] = useState<JobProgress | null>(null);
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const channelRef = useRef<RealtimeChannel | null>(null);
-  const watchedPageIdRef = useRef<string | null>(null);
+export function useJobProgress(
+  jobId: string | null,
+  options: UseJobProgressOptions = {}
+) {
+  const { 
+    pollingInterval = 500, 
+    onComplete, 
+    onError 
+  } = options;
 
-  // Map database step names to UI step indices
-  const stepToIndex = useCallback((step: string): number => {
-    const stepMap: Record<string, number> = {
-      'queued': 0,
-      'validating': 0,
-      'fetching_content': 1,
-      'fetching_wordpress': 1,
-      'fetching_neuronwriter': 2,
-      'waiting_neuronwriter': 2,
-      'analyzing_content': 2,
-      'generating_content': 3,
-      'processing_response': 3,
-      'optimization_complete': 4,
-      'saving_results': 4,
-      'completed': 4,
-      'failed': -1,
-    };
-    return stepMap[step] ?? 0;
+  const [job, setJob] = useState<JobProgress | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const activeRef = useRef(false);
+
+  const cleanup = useCallback(() => {
+    activeRef.current = false;
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
   }, []);
 
-  // Subscribe to job updates for a specific page
-  const watchJob = useCallback(async (pageId: string) => {
-    // Cleanup existing subscription
-    if (channelRef.current) {
-      await supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
+  const fetchJobStatus = useCallback(async (id: string) => {
+    if (!activeRef.current) return;
 
-    watchedPageIdRef.current = pageId;
+    try {
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-    // First, check for existing running job
-    const { data: existingJob } = await supabase
-      .from('jobs')
-      .select('*')
-      .eq('page_id', pageId)
-      .in('status', ['queued', 'running'])
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (existingJob) {
-      const job: JobProgress = {
-        id: existingJob.id,
-        pageId: existingJob.page_id || pageId,
-        status: existingJob.status as JobProgress['status'],
-        currentStep: existingJob.current_step || 'queued',
-        progress: existingJob.progress || 0,
-        errorMessage: existingJob.error_message || undefined,
-        result: existingJob.result,
-        startedAt: existingJob.started_at || undefined,
-        completedAt: existingJob.completed_at || undefined,
-      };
-      setActiveJob(job);
-    }
-
-    // Subscribe to realtime updates
-    const channel = supabase
-      .channel(`job-progress-${pageId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'jobs',
-          filter: `page_id=eq.${pageId}`,
-        },
-        (payload) => {
-          console.log('[JobProgress] Realtime update:', payload);
-          
-          const newData = payload.new as Record<string, unknown>;
-          if (!newData) return;
-
-          const job: JobProgress = {
-            id: newData.id as string,
-            pageId: newData.page_id as string || pageId,
-            status: newData.status as JobProgress['status'],
-            currentStep: (newData.current_step as string) || 'queued',
-            progress: (newData.progress as number) || 0,
-            errorMessage: (newData.error_message as string) || undefined,
-            result: newData.result,
-            startedAt: (newData.started_at as string) || undefined,
-            completedAt: (newData.completed_at as string) || undefined,
-          };
-
-          setActiveJob(job);
-
-          // Trigger callbacks
-          if (job.status === 'completed') {
-            options.onComplete?.(job);
-          } else if (job.status === 'failed') {
-            options.onError?.(job);
-          }
-        }
-      )
-      .subscribe((status) => {
-        console.log('[JobProgress] Subscription status:', status);
-        setIsSubscribed(status === 'SUBSCRIBED');
-      });
-
-    channelRef.current = channel;
-  }, [options.onComplete, options.onError]);
-
-  // Stop watching
-  const stopWatching = useCallback(async () => {
-    if (channelRef.current) {
-      await supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
-    watchedPageIdRef.current = null;
-    setActiveJob(null);
-    setIsSubscribed(false);
-  }, []);
-
-  // Get current step index for UI
-  const currentStepIndex = activeJob ? stepToIndex(activeJob.currentStep) : 0;
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
+      if (error) {
+        console.error('[useJobProgress] Fetch error:', error);
+        return;
       }
-    };
-  }, []);
+
+      if (!data) return;
+
+      const jobProgress: JobProgress = {
+        id: data.id,
+        status: data.status,
+        progress: data.progress || 0,
+        currentStep: data.current_step || 'Processing...',
+        result: data.result,
+        error: data.error_message,
+      };
+
+      setJob(jobProgress);
+
+      // Handle completion
+      if (data.status === 'completed') {
+        cleanup();
+        setIsLoading(false);
+        onComplete?.(data.result);
+      }
+
+      // Handle failure
+      if (data.status === 'failed') {
+        cleanup();
+        setIsLoading(false);
+        onError?.(data.error_message || 'Job failed');
+      }
+
+    } catch (err) {
+      console.error('[useJobProgress] Exception:', err);
+    }
+  }, [cleanup, onComplete, onError]);
+
+  useEffect(() => {
+    if (!jobId) {
+      cleanup();
+      setJob(null);
+      return;
+    }
+
+    setIsLoading(true);
+    activeRef.current = true;
+
+    // Initial fetch
+    fetchJobStatus(jobId);
+
+    // Start polling
+    pollRef.current = setInterval(() => {
+      if (activeRef.current) {
+        fetchJobStatus(jobId);
+      }
+    }, pollingInterval);
+
+    return cleanup;
+  }, [jobId, pollingInterval, fetchJobStatus, cleanup]);
 
   return {
-    activeJob,
-    isSubscribed,
-    currentStepIndex,
-    watchJob,
-    stopWatching,
-    isRunning: activeJob?.status === 'running' || activeJob?.status === 'queued',
-    isCompleted: activeJob?.status === 'completed',
-    isFailed: activeJob?.status === 'failed',
+    job,
+    isLoading,
+    progress: job?.progress || 0,
+    currentStep: job?.currentStep || '',
+    status: job?.status || 'pending',
+    result: job?.result,
+    error: job?.error,
+    isComplete: job?.status === 'completed',
+    isFailed: job?.status === 'failed',
+    isRunning: job?.status === 'running',
   };
 }
+
+export default useJobProgress;
