@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Zap, Loader2, Check, AlertCircle, Sparkles } from 'lucide-react';
-import { BlogPostDisplay } from '../blog/BlogPostDisplay';
+import React, { useState, useCallback, useEffect, useRef, Component, ErrorInfo, ReactNode } from 'react';
+import { Zap, Loader2, Check, AlertCircle, Sparkles, RefreshCw } from 'lucide-react';
+// CRITICAL FIX: Import BlogPostRenderer which accepts post prop, NOT BlogPostDisplay which expects slug
+import { BlogPostRenderer } from '../blog/BlogPostComponents';
 import { invokeEdgeFunction } from '@/lib/supabase';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -21,6 +22,109 @@ interface JobStatus {
   error_message?: string;
 }
 
+// ============================================================================
+// ERROR BOUNDARY - Catches rendering crashes and prevents blank screen
+// ============================================================================
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  onReset?: () => void;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class BlogRenderErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('[QuickOptimize ErrorBoundary] Caught error:', error);
+    console.error('[QuickOptimize ErrorBoundary] Error info:', errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-6 bg-red-50 border-2 border-red-200 rounded-lg">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="font-bold text-red-900 mb-1">Content Rendering Error</h3>
+              <p className="text-sm text-red-800 mb-3">
+                Failed to display the optimized content. The data format may be unexpected.
+              </p>
+              <p className="text-xs text-red-600 font-mono mb-3">
+                {this.state.error?.message || 'Unknown error'}
+              </p>
+              <button
+                onClick={() => {
+                  this.setState({ hasError: false, error: null });
+                  this.props.onReset?.();
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Try Again
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+// ============================================================================
+// VALIDATE AND NORMALIZE BLOG POST DATA
+// ============================================================================
+function validateAndNormalizeBlogPost(data: any): any | null {
+  if (!data || typeof data !== 'object') {
+    console.error('[validateBlogPost] Invalid data: not an object');
+    return null;
+  }
+
+  // Ensure required fields exist
+  const normalized = {
+    title: data.title || data.optimizedTitle || 'Optimized Post',
+    author: data.author || 'Content Expert',
+    publishedAt: data.publishedAt || new Date().toISOString(),
+    excerpt: data.excerpt || data.metaDescription || '',
+    sections: [] as any[],
+  };
+
+  // Validate sections
+  if (Array.isArray(data.sections) && data.sections.length > 0) {
+    normalized.sections = data.sections.filter((section: any) => {
+      if (!section || typeof section !== 'object') return false;
+      if (!section.type) return false;
+      return true;
+    });
+  }
+
+  // If no valid sections, create a fallback
+  if (normalized.sections.length === 0) {
+    normalized.sections = [
+      {
+        type: 'paragraph',
+        content: data.content || data.optimizedContent || 'Content optimization completed successfully.'
+      }
+    ];
+  }
+
+  console.log('[validateBlogPost] Normalized with', normalized.sections.length, 'sections');
+  return normalized;
+}
+
 /**
  * ENTERPRISE-GRADE Quick Optimize Button
  * Uses Supabase Edge Functions for backend processing
@@ -37,6 +141,7 @@ export function QuickOptimizeButton({
   const [progress, setProgress] = useState(0);
   const [currentStep, setCurrentStep] = useState('Awaiting start...');
   const [blogPost, setBlogPost] = useState<any>(null);
+  const [normalizedPost, setNormalizedPost] = useState<any>(null);
   
   const pollingActiveRef = useRef(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -73,19 +178,29 @@ export function QuickOptimizeButton({
 
       // Check for completion
       if (job.status === 'completed') {
-  console.log(`[Poll] Job completed! Finalizing...`);
-  console.log('[Poll] Job result:', JSON.stringify(job.result, null, 2));
-  pollingActiveRef.current = false;
-  
-  // Set blog post from job result
-  if (job.result) {
-    console.log('[Poll] Setting blogPost state with result');
-    setBlogPost(job.result);
-  } else {
-    console.error('[Poll] No result in completed job!');
-  }
-
+        console.log(`[Poll] Job completed! Finalizing...`);
+        console.log('[Poll] Job result:', JSON.stringify(job.result, null, 2));
+        pollingActiveRef.current = false;
         
+        // Set blog post from job result with validation
+        if (job.result) {
+          console.log('[Poll] Setting blogPost state with result');
+          setBlogPost(job.result);
+          
+          // CRITICAL: Validate and normalize the post for rendering
+          const validated = validateAndNormalizeBlogPost(job.result);
+          if (validated) {
+            console.log('[Poll] Validated post with', validated.sections.length, 'sections');
+            setNormalizedPost(validated);
+          } else {
+            console.error('[Poll] Failed to validate blog post result');
+            setError('Failed to process optimization result');
+          }
+        } else {
+          console.error('[Poll] No result in completed job!');
+          setError('Optimization completed but no content was generated');
+        }
+
         setIsComplete(true);
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
@@ -145,6 +260,7 @@ export function QuickOptimizeButton({
       setIsComplete(false);
       setProgress(0);
       setBlogPost(null);
+      setNormalizedPost(null);
       pollingActiveRef.current = false;
       console.log('[Click] Starting optimization for URL:', url);
       
@@ -216,6 +332,7 @@ export function QuickOptimizeButton({
     setError(null);
     setProgress(0);
     setBlogPost(null);
+    setNormalizedPost(null);
     setCurrentStep('Awaiting start...');
   };
 
@@ -319,13 +436,12 @@ export function QuickOptimizeButton({
         </div>
       )}
 
-      {/* Blog Post Display - SOTA HTML Rendering */}
-      {isComplete && blogPost && !error && (
+      {/* Blog Post Display - FIXED: Using BlogPostRenderer with proper error boundary */}
+      {isComplete && normalizedPost && !error && (
         <div className="mt-8 border-t-2 border-gray-200 pt-8">
-          <BlogPostDisplay 
-            post={blogPost} 
-            isLoading={false} 
-          />
+          <BlogRenderErrorBoundary onReset={handleReset}>
+            <BlogPostRenderer post={normalizedPost} />
+          </BlogRenderErrorBoundary>
         </div>
       )}
     </div>
