@@ -1,16 +1,23 @@
-'use client';
+// src/components/pipeline/QuickOptimizeButton.tsx
+// ============================================================================
+// ENTERPRISE-GRADE QUICK OPTIMIZE BUTTON v5.0
+// FIXES: Polling, Progress Tracking, Error Handling
+// ============================================================================
 
-import React, { useState, useCallback, useEffect, useRef, Component, ErrorInfo, ReactNode } from 'react';
-import { Zap, Loader2, Check, AlertCircle, Sparkles, RefreshCw } from 'lucide-react';
-// CRITICAL FIX: Import BlogPostRenderer which accepts post prop, NOT BlogPostDisplay which expects slug
-import { BlogPostRenderer } from '../blog/BlogPostComponents';
-import { invokeEdgeFunction } from '@/lib/supabase';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { Zap, Loader2, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
+import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
+import { ResultsModal } from './ResultsModal';
 
 interface QuickOptimizeButtonProps {
   url: string;
-  onJobStart?: (jobId: string) => void;
-  onJobComplete?: (jobId: string, data?: any) => void;
+  title?: string;
+  disabled?: boolean;
+  onComplete?: (result: any) => void;
 }
 
 interface JobStatus {
@@ -22,429 +29,286 @@ interface JobStatus {
   error_message?: string;
 }
 
-// ============================================================================
-// ERROR BOUNDARY - Catches rendering crashes and prevents blank screen
-// ============================================================================
-interface ErrorBoundaryProps {
-  children: ReactNode;
-  onReset?: () => void;
-}
-
-interface ErrorBoundaryState {
-  hasError: boolean;
-  error: Error | null;
-}
-
-class BlogRenderErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('[QuickOptimize ErrorBoundary] Caught error:', error);
-    console.error('[QuickOptimize ErrorBoundary] Error info:', errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="p-6 bg-red-50 border-2 border-red-200 rounded-lg">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <h3 className="font-bold text-red-900 mb-1">Content Rendering Error</h3>
-              <p className="text-sm text-red-800 mb-3">
-                Failed to display the optimized content. The data format may be unexpected.
-              </p>
-              <p className="text-xs text-red-600 font-mono mb-3">
-                {this.state.error?.message || 'Unknown error'}
-              </p>
-              <button
-                onClick={() => {
-                  this.setState({ hasError: false, error: null });
-                  this.props.onReset?.();
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded text-sm hover:bg-red-700"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Try Again
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return this.props.children;
-  }
-}
-
-// ============================================================================
-// VALIDATE AND NORMALIZE BLOG POST DATA
-// ============================================================================
-function validateAndNormalizeBlogPost(data: any): any | null {
-  if (!data || typeof data !== 'object') {
-    console.error('[validateBlogPost] Invalid data: not an object');
-    return null;
-  }
-
-  // Ensure required fields exist
-  const normalized = {
-    title: data.title || data.optimizedTitle || 'Optimized Post',
-    author: data.author || 'Content Expert',
-    publishedAt: data.publishedAt || new Date().toISOString(),
-    excerpt: data.excerpt || data.metaDescription || '',
-    sections: [] as any[],
-  };
-
-  // Validate sections
-  if (Array.isArray(data.sections) && data.sections.length > 0) {
-    normalized.sections = data.sections.filter((section: any) => {
-      if (!section || typeof section !== 'object') return false;
-      if (!section.type) return false;
-      return true;
-    });
-  }
-
-  // If no valid sections, create a fallback
-  if (normalized.sections.length === 0) {
-    normalized.sections = [
-      {
-        type: 'paragraph',
-        content: data.content || data.optimizedContent || 'Content optimization completed successfully.'
-      }
-    ];
-  }
-
-  console.log('[validateBlogPost] Normalized with', normalized.sections.length, 'sections');
-  return normalized;
-}
-
-/**
- * ENTERPRISE-GRADE Quick Optimize Button
- * Uses Supabase Edge Functions for backend processing
- */
-export function QuickOptimizeButton({
-  url,
-  onJobStart,
-  onJobComplete,
+export function QuickOptimizeButton({ 
+  url, 
+  title, 
+  disabled = false,
+  onComplete 
 }: QuickOptimizeButtonProps) {
-  const [isLoading, setIsLoading] = useState(false);
+  const [isOptimizing, setIsOptimizing] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isComplete, setIsComplete] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [currentStep, setCurrentStep] = useState('Awaiting start...');
-  const [blogPost, setBlogPost] = useState<any>(null);
-  const [normalizedPost, setNormalizedPost] = useState<any>(null);
+  const [currentStep, setCurrentStep] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<any>(null);
+  const [showResults, setShowResults] = useState(false);
+  const [elapsedTime, setElapsedTime] = useState(0);
   
-  const pollingActiveRef = useRef(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const timeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingActiveRef = useRef(false);
+  const startTimeRef = useRef<number>(0);
 
-  // Poll job status from Supabase database
-  const pollJobStatus = useCallback(async (currentJobId: string) => {
+  // Cleanup function
+  const cleanup = useCallback(() => {
+    pollingActiveRef.current = false;
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (timeIntervalRef.current) {
+      clearInterval(timeIntervalRef.current);
+      timeIntervalRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return cleanup;
+  }, [cleanup]);
+
+  // Poll job status
+  const pollJobStatus = useCallback(async (jobIdToCheck: string) => {
     if (!pollingActiveRef.current) return;
-    
+
     try {
-      // Query the jobs table directly from Supabase
-      const { data: jobData, error: queryError } = await supabase
+      const { data: jobData, error: jobError } = await supabase
         .from('jobs')
         .select('*')
-        .eq('id', currentJobId)
+        .eq('id', jobIdToCheck)
         .single();
 
-      if (queryError) {
-        console.error('[Poll] Error fetching job:', queryError);
+      if (jobError) {
+        console.error('[Poll] Error fetching job:', jobError);
         return;
       }
 
       if (!jobData) {
-        console.error('[Poll] Job not found:', currentJobId);
+        console.warn('[Poll] No job data found');
         return;
       }
 
-      const job = jobData as JobStatus;
-      
-      console.log(`[Poll] Job ${currentJobId} status: ${job.status}, progress: ${job.progress}%`);
-      
-      // Update UI with latest data
-      setProgress(job.progress || 0);
-      setCurrentStep(job.current_step || 'Processing...');
+      console.log(`[Poll] Job ${jobIdToCheck}: ${jobData.progress}% - ${jobData.current_step}`);
 
-      // Check for completion
-      if (job.status === 'completed') {
-        console.log(`[Poll] Job completed! Finalizing...`);
-        console.log('[Poll] Job result:', JSON.stringify(job.result, null, 2));
-        pollingActiveRef.current = false;
-        
-        // Set blog post from job result with validation
-        if (job.result) {
-          console.log('[Poll] Setting blogPost state with result');
-          setBlogPost(job.result);
-          
-          // CRITICAL: Validate and normalize the post for rendering
-          const validated = validateAndNormalizeBlogPost(job.result);
-          if (validated) {
-            console.log('[Poll] Validated post with', validated.sections.length, 'sections');
-            setNormalizedPost(validated);
-          } else {
-            console.error('[Poll] Failed to validate blog post result');
-            setError('Failed to process optimization result');
-          }
-        } else {
-          console.error('[Poll] No result in completed job!');
-          setError('Optimization completed but no content was generated');
-        }
+      // Update UI
+      setProgress(jobData.progress || 0);
+      setCurrentStep(jobData.current_step || 'Processing...');
 
-        setIsComplete(true);
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
-        
-        onJobComplete?.(currentJobId, job.result);
-      } else if (job.status === 'failed') {
-        console.log(`[Poll] Job failed: ${job.error_message}`);
-        pollingActiveRef.current = false;
-        setError(job.error_message || 'Optimization failed');
-        setIsComplete(true);
-        
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
+      // Handle completion
+      if (jobData.status === 'completed') {
+        console.log('[Poll] Job completed!', jobData.result);
+        cleanup();
+        setIsOptimizing(false);
+        setResult(jobData.result);
+        setShowResults(true);
+        toast.success('Optimization complete!');
+        onComplete?.(jobData.result);
       }
+
+      // Handle failure
+      if (jobData.status === 'failed') {
+        console.error('[Poll] Job failed:', jobData.error_message);
+        cleanup();
+        setIsOptimizing(false);
+        setError(jobData.error_message || 'Optimization failed');
+        toast.error(jobData.error_message || 'Optimization failed');
+      }
+
     } catch (err) {
-      console.error('[Poll] Error:', err);
-      // Keep polling even on error
+      console.error('[Poll] Exception:', err);
     }
-  }, [onJobComplete]);
+  }, [cleanup, onComplete]);
 
-  // Start polling when jobId changes
-  useEffect(() => {
-    if (!jobId) return;
-    
-    console.log(`[Effect] Starting polling for job: ${jobId}`);
-    
-    pollingActiveRef.current = true;
-    
-    // Poll immediately
-    pollJobStatus(jobId);
-    
-    // Then set up interval - poll every 500ms for responsiveness
-    pollIntervalRef.current = setInterval(() => {
-      if (pollingActiveRef.current) {
-        pollJobStatus(jobId);
-      }
-    }, 500);
-    
-    return () => {
-      console.log(`[Effect] Cleanup: stopping polling`);
-      pollingActiveRef.current = false;
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-    };
-  }, [jobId, pollJobStatus]);
+  // Start optimization
+  const handleOptimize = async () => {
+    if (!url) {
+      toast.error('Please enter a URL to optimize');
+      return;
+    }
 
-  const handleOptimize = useCallback(async () => {
+    // Reset state
+    setIsOptimizing(true);
+    setProgress(0);
+    setCurrentStep('Starting optimization...');
+    setError(null);
+    setResult(null);
+    setElapsedTime(0);
+    startTimeRef.current = Date.now();
+
+    // Start elapsed time counter
+    timeIntervalRef.current = setInterval(() => {
+      setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 1000);
+
     try {
-      setIsLoading(true);
-      setError(null);
-      setIsComplete(false);
-      setProgress(0);
-      setBlogPost(null);
-      setNormalizedPost(null);
-      pollingActiveRef.current = false;
-      console.log('[Click] Starting optimization for URL:', url);
-      
-      // Call Supabase Edge Function instead of /api/optimize
-      const { data, error: invokeError } = await invokeEdgeFunction<{
-        success: boolean;
-        jobId?: string;
-        message?: string;
-        error?: string;
-      }>('optimize-content', {
-        url,
-        siteId: 'default',
-        mode: 'optimize',
-        postTitle: 'Quick Optimized Blog Post',
+      console.log('[Optimize] Starting for URL:', url);
+
+      // Call the Edge Function
+      const { data, error: fnError } = await supabase.functions.invoke('optimize-content', {
+        body: {
+          url: url,
+          postTitle: title || url,
+        },
       });
 
-      if (invokeError) {
-        throw new Error(invokeError.message || 'Failed to start optimization');
+      if (fnError) {
+        throw new Error(fnError.message || 'Failed to start optimization');
       }
 
       if (!data?.success || !data?.jobId) {
-        throw new Error(data?.error || data?.message || 'Failed to start optimization');
+        throw new Error(data?.error || 'Invalid response from server');
       }
 
-      const newJobId = data.jobId;
-      
-      console.log('[Click] Optimization started with jobId:', newJobId);
-      
-      setJobId(newJobId);
-      setIsLoading(false);
-      onJobStart?.(newJobId);
+      console.log('[Optimize] Job created:', data.jobId);
+      setJobId(data.jobId);
+
+      // Start polling
+      pollingActiveRef.current = true;
+      pollIntervalRef.current = setInterval(() => {
+        if (pollingActiveRef.current) {
+          pollJobStatus(data.jobId);
+        }
+      }, 500); // Poll every 500ms
+
+      // Initial poll
+      pollJobStatus(data.jobId);
+
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error('[Click] Error starting optimization:', errorMsg);
-      setError(errorMsg);
-      setIsLoading(false);
+      console.error('[Optimize] Error:', err);
+      cleanup();
+      setIsOptimizing(false);
+      const message = err instanceof Error ? err.message : 'Failed to start optimization';
+      setError(message);
+      toast.error(message);
     }
-  }, [url, onJobStart]);
-
-  const getButtonState = () => {
-    if (isLoading || (jobId && !isComplete))
-      return {
-        icon: <Loader2 className="w-4 h-4 animate-spin" />,
-        label: `Optimizing... ${progress}%`,
-        color: 'bg-blue-500 hover:bg-blue-600',
-      };
-    if (isComplete && !error)
-      return {
-        icon: <Check className="w-4 h-4" />,
-        label: 'Complete',
-        color: 'bg-green-500 hover:bg-green-600',
-      };
-    if (error)
-      return {
-        icon: <AlertCircle className="w-4 h-4" />,
-        label: 'Error',
-        color: 'bg-red-500 hover:bg-red-600',
-      };
-    return {
-      icon: <Zap className="w-4 h-4" />,
-      label: 'Optimize',
-      color: 'bg-amber-500 hover:bg-amber-600',
-    };
   };
 
-  const handleReset = () => {
-    setJobId(null);
-    setIsComplete(false);
-    setError(null);
-    setProgress(0);
-    setBlogPost(null);
-    setNormalizedPost(null);
-    setCurrentStep('Awaiting start...');
+  // Format elapsed time
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   };
-
-  const state = getButtonState();
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <button
-          onClick={isComplete ? handleReset : handleOptimize}
-          disabled={isLoading || (jobId && !isComplete)}
-          title="Quick optimize this URL - Enterprise-grade optimization"
-          className={`px-4 py-2.5 rounded-lg transition-all duration-200 text-white font-semibold flex items-center gap-2 shadow-lg hover:shadow-xl transform hover:scale-105 ${
-            isLoading || (jobId && !isComplete) ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'
-          } ${state.color}`}
-        >
-          {state.icon}
-          {isComplete ? (error ? 'Try Again' : 'Optimize Another') : state.label}
-        </button>
-        {error && (
-          <span className="text-xs text-red-600 font-medium bg-red-50 px-3 py-1 rounded">
-            {error}
-          </span>
+    <>
+      <div className="space-y-4">
+        {/* Optimize Button */}
+        {!isOptimizing && !result && (
+          <Button
+            onClick={handleOptimize}
+            disabled={disabled || !url}
+            className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold py-3 shadow-lg"
+          >
+            <Zap className="w-5 h-5 mr-2" />
+            Quick Optimize
+          </Button>
+        )}
+
+        {/* Progress UI */}
+        {isOptimizing && (
+          <div className="space-y-4 p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                <span className="font-semibold text-blue-900">Optimizing Content</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-blue-600">
+                <Clock className="w-4 h-4" />
+                {formatTime(elapsedTime)}
+              </div>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-blue-700">{currentStep}</span>
+                <span className="font-semibold text-blue-900">{progress}%</span>
+              </div>
+              <Progress value={progress} className="h-3 bg-blue-100" />
+            </div>
+
+            {/* Cancel Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                cleanup();
+                setIsOptimizing(false);
+                toast.info('Optimization cancelled');
+              }}
+              className="w-full"
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
+
+        {/* Error Display */}
+        {error && !isOptimizing && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+            <div className="flex items-center gap-2 text-red-700">
+              <XCircle className="w-5 h-5" />
+              <span className="font-semibold">Optimization Failed</span>
+            </div>
+            <p className="mt-2 text-sm text-red-600">{error}</p>
+            <Button
+              onClick={handleOptimize}
+              variant="outline"
+              size="sm"
+              className="mt-3"
+            >
+              Try Again
+            </Button>
+          </div>
+        )}
+
+        {/* Success Display */}
+        {result && !isOptimizing && (
+          <div className="p-4 bg-green-50 border border-green-200 rounded-xl">
+            <div className="flex items-center gap-2 text-green-700">
+              <CheckCircle className="w-5 h-5" />
+              <span className="font-semibold">Optimization Complete!</span>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <Badge variant="secondary">
+                Score: {result.qualityScore || 'N/A'}
+              </Badge>
+              <Badge variant="secondary">
+                Words: {result.wordCount || 'N/A'}
+              </Badge>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <Button
+                onClick={() => setShowResults(true)}
+                size="sm"
+              >
+                View Results
+              </Button>
+              <Button
+                onClick={() => {
+                  setResult(null);
+                  setError(null);
+                }}
+                variant="outline"
+                size="sm"
+              >
+                Optimize Another
+              </Button>
+            </div>
+          </div>
         )}
       </div>
 
-      {/* Enterprise Progress Bar */}
-      {jobId && !isComplete && progress > 0 && (
-        <div className="space-y-2">
-          <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden shadow-inner">
-            <div
-              className="bg-gradient-to-r from-blue-500 via-blue-400 to-blue-600 h-full transition-all duration-300 ease-out shadow-lg relative"
-              style={{ width: `${progress}%` }}
-            >
-              <div className="absolute inset-0 bg-white/20 animate-pulse"></div>
-            </div>
-          </div>
-          <div className="flex justify-between items-center">
-            <p className="text-sm font-semibold text-gray-700">{currentStep}</p>
-            <p className="text-sm font-bold text-blue-600">{progress}%</p>
-          </div>
-        </div>
+      {/* Results Modal */}
+      {showResults && result && (
+        <ResultsModal
+          isOpen={showResults}
+          onClose={() => setShowResults(false)}
+          result={result}
+          pageId={jobId || ''}
+        />
       )}
-
-      {/* Current step indicator */}
-      {jobId && !isComplete && (
-        <div className="flex items-center gap-2 text-xs text-gray-600">
-          <Sparkles className="w-4 h-4 text-yellow-500 animate-spin" />
-          <span>Processing optimization stages...</span>
-        </div>
-      )}
-
-      {/* Result - Styled Blog Post Box */}
-      {blogPost && isComplete && !error && (
-        <div className="mt-4 p-5 bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-300 rounded-xl shadow-lg">
-          <div className="flex items-start gap-3 mb-3">
-            <div className="flex-shrink-0">
-              <Check className="w-6 h-6 text-green-600" />
-            </div>
-            <div className="flex-1">
-              <h3 className="text-lg font-bold text-green-900 mb-1">Optimization Complete!</h3>
-              <p className="text-sm text-green-700">Your content has been enhanced with enterprise-grade optimization.</p>
-            </div>
-          </div>
-          
-          <div className="bg-white rounded-lg p-4 mt-3 space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-green-50 p-3 rounded">
-                <p className="text-xs text-green-700 font-semibold">Title</p>
-                <p className="text-sm font-semibold text-gray-900 truncate">
-                  {blogPost.title || blogPost.optimizedTitle || 'Optimized Post'}
-                </p>
-              </div>
-              <div className="bg-blue-50 p-3 rounded">
-                <p className="text-xs text-blue-700 font-semibold">Author</p>
-                <p className="text-sm font-semibold text-gray-900">{blogPost.author || 'AI'}</p>
-              </div>
-              <div className="bg-purple-50 p-3 rounded">
-                <p className="text-xs text-purple-700 font-semibold">Quality Score</p>
-                <p className="text-sm font-bold text-purple-900">
-                  {blogPost.qualityScore || blogPost.componentCount || 85}/100
-                </p>
-              </div>
-              <div className="bg-orange-50 p-3 rounded">
-                <p className="text-xs text-orange-700 font-semibold">Word Count</p>
-                <p className="text-sm font-semibold text-gray-900">
-                  {blogPost.contentStrategy?.wordCount || blogPost.wordCount || '2000+'}
-                </p>
-              </div>
-            </div>
-            
-            {(blogPost.excerpt || blogPost.metaDescription) && (
-              <div className="bg-gray-50 p-3 rounded border-l-4 border-green-500">
-                <p className="text-xs text-gray-600 font-semibold mb-1">Summary</p>
-                <p className="text-sm text-gray-800 line-clamp-2">
-                  {blogPost.excerpt || blogPost.metaDescription}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Blog Post Display - FIXED: Using BlogPostRenderer with proper error boundary */}
-      {isComplete && normalizedPost && !error && (
-        <div className="mt-8 border-t-2 border-gray-200 pt-8">
-          <BlogRenderErrorBoundary onReset={handleReset}>
-            <BlogPostRenderer post={normalizedPost} />
-          </BlogRenderErrorBoundary>
-        </div>
-      )}
-    </div>
+    </>
   );
 }
 
