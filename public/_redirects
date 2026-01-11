@@ -1,0 +1,8 @@
+# Cloudflare Pages SPA Redirect Rules
+# All routes should serve index.html for client-side React Router to handle
+
+# API routes (if any) - don't redirect these
+/api/*  /api/:splat  200
+
+# All other routes serve index.html (SPA fallback)
+/*  /index.html  200
