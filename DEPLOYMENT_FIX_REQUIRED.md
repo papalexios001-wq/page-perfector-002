@@ -1,3 +1,12 @@
+# ✅ CRITICAL ROUTING FIX APPLIED - Rebuild #{deploy_count}
+
+**LATEST FIX (Just Applied):** Updated App.tsx routing from `/category/:slug` to `/blog/:slug` to match the navigation in QuickOptimize component. This fixes the blank screen issue after blog post optimization.
+
+**Commit:** 447c13d - "CRITICAL FIX: Update blog route from /category/:slug to /blog/:slug"
+
+---
+
+
 # 🚨 CRITICAL: Deployment Configuration Required
 
 ## ROOT CAUSE IDENTIFIED
