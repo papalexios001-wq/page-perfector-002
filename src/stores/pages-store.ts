@@ -33,6 +33,7 @@ export interface PageRecord {
   featuredImage?: string;
   analyzedAt?: string;
   optimizedAt?: string;
+  optimizedContent?: string;  // <-- CRITICAL: This field stores the AI-generated blog post!
   publishedAt?: string;
   error?: string;
   retryCount: number;
