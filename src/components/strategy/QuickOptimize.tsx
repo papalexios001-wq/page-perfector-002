@@ -11,14 +11,56 @@ import { toast } from 'sonner';
 import { invokeEdgeFunction } from '@/lib/supabase';
 import { useNavigate } from 'react-router-dom';
 
+// Helper function to wait for store persistence
+const waitForStorePersistence = (slug: string, maxWaitMs: number = 3000): Promise<boolean> => {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    const checkInterval = 100; // Check every 100ms
+    
+    const checkStore = () => {
+      try {
+        // Read directly from localStorage to verify persistence
+        const storedData = localStorage.getItem('wp-optimizer-pages');
+        if (storedData) {
+          const parsed = JSON.parse(storedData);
+          const pages = parsed?.state?.pages || [];
+          const page = pages.find((p: any) => p.slug === slug);
+          
+          if (page && page.optimizedContent) {
+            console.log('[QuickOptimize] Store persistence verified for slug:', slug);
+            resolve(true);
+            return;
+          }
+        }
+        
+        // Check timeout
+        if (Date.now() - startTime > maxWaitMs) {
+          console.warn('[QuickOptimize] Store persistence timeout for slug:', slug);
+          resolve(false);
+          return;
+        }
+        
+        // Keep checking
+        setTimeout(checkStore, checkInterval);
+      } catch (e) {
+        console.error('[QuickOptimize] Error checking store persistence:', e);
+        resolve(false);
+      }
+    };
+    
+    checkStore();
+  });
+};
+
 export function QuickOptimize() {
-  const { addPages, updatePage, addActivityLog } = usePagesStore();
+  const { addPages, updatePage, addActivityLog, pages } = usePagesStore();
   const navigate = useNavigate();
   const [pageUrl, setPageUrl] = useState('');
   const [targetKeyword, setTargetKeyword] = useState('');
   const [outputMode, setOutputMode] = useState<'draft' | 'publish'>('draft');
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [statusMessage, setStatusMessage] = useState('');
 
   const handleOptimize = async () => {
     if (!pageUrl) {
@@ -28,12 +70,19 @@ export function QuickOptimize() {
 
     setIsOptimizing(true);
     setProgress(0);
+    setStatusMessage('Initializing optimization...');
 
     try {
-      // Create page record
-      const pageSlug = pageUrl.replace(/^\//, '');
+      // Create page record - normalize the slug
+      const pageSlug = pageUrl.replace(/^\/+/, '').replace(/\/+$/, '').trim();
+      
+      if (!pageSlug) {
+        throw new Error('Invalid page URL');
+      }
+      
+      const pageId = Math.random().toString(36).substring(2, 15);
       const newPage = {
-        id: Math.random().toString(36).substring(2, 15),
+        id: pageId,
         url: pageUrl,
         slug: pageSlug,
         title: `Page: ${pageUrl}`,
@@ -45,7 +94,9 @@ export function QuickOptimize() {
         retryCount: 0,
       };
 
+      console.log('[QuickOptimize] Creating page record:', newPage);
       addPages([newPage]);
+      
       addActivityLog({
         type: 'info',
         pageUrl,
@@ -53,10 +104,21 @@ export function QuickOptimize() {
         details: { keyword: targetKeyword || 'auto-detect', outputMode },
       });
 
-      // Simulate progress updates
+      // Simulate progress updates with status messages
+      setStatusMessage('Analyzing content structure...');
       const progressInterval = setInterval(() => {
-        setProgress((prev) => Math.min(prev + 10, 90));
-      }, 300);
+        setProgress((prev) => {
+          const newProgress = Math.min(prev + 8, 85);
+          if (newProgress > 30 && newProgress <= 50) {
+            setStatusMessage('Generating optimized content...');
+          } else if (newProgress > 50 && newProgress <= 70) {
+            setStatusMessage('Applying SEO enhancements...');
+          } else if (newProgress > 70) {
+            setStatusMessage('Finalizing blog post...');
+          }
+          return newProgress;
+        });
+      }, 400);
 
       // Call the REAL optimization Edge Function
       console.log('[QuickOptimize] Calling optimize-content Edge Function');
@@ -70,7 +132,6 @@ export function QuickOptimize() {
       });
 
       clearInterval(progressInterval);
-      setProgress(100);
 
       if (error) {
         console.error('[QuickOptimize] Optimization error:', error);
@@ -83,14 +144,34 @@ export function QuickOptimize() {
       }
 
       console.log('[QuickOptimize] Optimization successful:', data);
+      setProgress(90);
+      setStatusMessage('Saving optimized content...');
 
+      // CRITICAL: Stringify the result for storage
+      const optimizedContentString = JSON.stringify(data.result);
+      
       // Update page with optimized content
-      updatePage(newPage.id, {
+      updatePage(pageId, {
         status: 'completed',
         optimizedAt: new Date().toISOString(),
-        optimizedContent: JSON.stringify(data.result),
+        optimizedContent: optimizedContentString,
         title: data.result.title || newPage.title,
       });
+
+      console.log('[QuickOptimize] Page updated with optimized content');
+
+      // Wait for store persistence before navigation
+      setProgress(95);
+      setStatusMessage('Preparing preview...');
+      
+      const persisted = await waitForStorePersistence(pageSlug, 3000);
+      
+      if (!persisted) {
+        console.warn('[QuickOptimize] Store persistence not confirmed, proceeding anyway');
+      }
+
+      setProgress(100);
+      setStatusMessage('Complete!');
 
       addActivityLog({
         type: 'success',
@@ -108,13 +189,16 @@ export function QuickOptimize() {
       setTargetKeyword('');
 
       // Navigate to the optimized blog post page
+      // Use a small delay to ensure UI updates
       setTimeout(() => {
         console.log('[QuickOptimize] Navigating to:', `/blog/${pageSlug}`);
         navigate(`/blog/${pageSlug}`);
-      }, 500);
+      }, 300);
 
     } catch (err: any) {
       console.error('[QuickOptimize] Error:', err);
+      setStatusMessage('Optimization failed');
+      
       addActivityLog({
         type: 'error',
         pageUrl,
@@ -127,6 +211,7 @@ export function QuickOptimize() {
     } finally {
       setIsOptimizing(false);
       setProgress(0);
+      setStatusMessage('');
     }
   };
 
@@ -198,7 +283,7 @@ export function QuickOptimize() {
         {isOptimizing && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Optimizing...</span>
+              <span>{statusMessage || 'Optimizing...'}</span>
               <span>{progress}%</span>
             </div>
             <div className="h-2 bg-muted rounded-full overflow-hidden">
