@@ -186,8 +186,6 @@ serve(async (req: Request) => {
     }
     // ============= END COMPATIBILITY =============
 
-        // Re-extract variables after compatibility layer may have populated them
-    const { pageId, siteUrl, username, applicationPassword, aiConfig, advanced, siteContext } = body;
 
 
     if (!pageId) {
