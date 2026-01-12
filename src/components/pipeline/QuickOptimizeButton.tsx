@@ -1,21 +1,16 @@
 // ============================================================================
 // ENTERPRISE-GRADE QUICK OPTIMIZE BUTTON
-// Version: 3.0.0 - SOTA Production Ready
-// 
-// Features:
-// - Bulletproof polling with proper cleanup
-// - Graceful error handling
-// - Real-time progress tracking
-// - Beautiful UI with animations
+// Version: 4.0.0 - FIXED: Now passes AI configuration to Edge Function
 // ============================================================================
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Zap, Loader2, CheckCircle, XCircle, Clock, RefreshCw } from 'lucide-react';
+import { Zap, Loader2, CheckCircle, XCircle, Clock, RefreshCw, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+import { useConfigStore } from '@/stores/config-store'; // CRITICAL: Import config store
 
 // ============================================================================
 // TYPES
@@ -64,6 +59,9 @@ export function QuickOptimizeButton({
   onComplete,
   onError
 }: QuickOptimizeButtonProps) {
+  // CRITICAL: Get AI configuration from store
+  const { ai, siteContext, advanced } = useConfigStore();
+  
   // State
   const [state, setState] = useState<OptimizeState>('idle');
   const [jobId, setJobId] = useState<string | null>(null);
@@ -73,12 +71,15 @@ export function QuickOptimizeButton({
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   
-  // Refs for cleanup and tracking
+  // Refs
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const startTimeRef = useRef(0);
   const pollCountRef = useRef(0);
+
+  // Check if AI is configured
+  const isAiConfigured = Boolean(ai.apiKey && ai.provider && ai.model);
 
   // ========================================================================
   // CLEANUP
@@ -126,7 +127,7 @@ export function QuickOptimizeButton({
 
       if (fetchError) {
         console.error(`[Poll #${pollNum}] Fetch error:`, fetchError);
-        return; // Don't stop polling on transient errors
+        return;
       }
 
       if (!data) {
@@ -137,11 +138,9 @@ export function QuickOptimizeButton({
       const job = data as JobRecord;
       console.log(`[Poll #${pollNum}] Status: ${job.status}, Progress: ${job.progress}%`);
 
-      // Update UI state
       setProgress(job.progress ?? 0);
       setCurrentStep(job.current_step ?? 'Processing...');
 
-      // Handle completion
       if (job.status === 'completed') {
         console.log(`[Poll #${pollNum}] ✅ Job completed!`);
         stopAllIntervals();
@@ -150,7 +149,7 @@ export function QuickOptimizeButton({
         setResult(job.result);
         
         toast.success('Optimization complete!', {
-          description: `Quality Score: ${job.result?.qualityScore ?? 'N/A'}/100`
+          description: `Quality: ${job.result?.qualityScore ?? 'N/A'}/100 • Words: ${job.result?.wordCount ?? 'N/A'}`
         });
         
         if (onComplete && job.result) {
@@ -158,7 +157,6 @@ export function QuickOptimizeButton({
         }
       }
 
-      // Handle failure
       if (job.status === 'failed') {
         console.error(`[Poll #${pollNum}] ❌ Job failed:`, job.error_message);
         stopAllIntervals();
@@ -176,18 +174,24 @@ export function QuickOptimizeButton({
 
     } catch (err) {
       console.error(`[Poll #${pollNum}] Exception:`, err);
-      // Continue polling on exceptions
     }
   }, [stopAllIntervals, onComplete, onError]);
 
   // ========================================================================
-  // START OPTIMIZATION
+  // START OPTIMIZATION - NOW PASSES AI CONFIG!
   // ========================================================================
   
   const handleOptimize = async () => {
     if (!url) {
       toast.error('Please enter a URL');
       return;
+    }
+
+    // Warn if AI not configured
+    if (!isAiConfigured) {
+      toast.warning('AI Provider not configured', {
+        description: 'Using fallback content. Configure AI in Settings for real content.',
+      });
     }
 
     // Reset state
@@ -210,15 +214,46 @@ export function QuickOptimizeButton({
 
     try {
       console.log('[Optimize] Starting optimization for:', url);
+      console.log('[Optimize] AI Config:', {
+        provider: ai.provider,
+        hasApiKey: !!ai.apiKey,
+        model: ai.model,
+        isConfigured: isAiConfigured,
+      });
 
-      // Call Edge Function
+      // ====================================================================
+      // CRITICAL FIX: Build AI config payload
+      // ====================================================================
+      const aiConfigPayload = isAiConfigured ? {
+        provider: ai.provider,
+        apiKey: ai.apiKey,
+        model: ai.model,
+      } : undefined;
+
+      // Call Edge Function WITH AI CONFIG
       const { data, error: invokeError } = await supabase.functions.invoke(
         'optimize-content',
         {
           body: { 
             url, 
+            siteUrl: url,
             postTitle: title || url,
-            siteUrl: url
+            // ================================================================
+            // CRITICAL: Pass the AI configuration!
+            // ================================================================
+            aiConfig: aiConfigPayload,
+            // Also pass other useful context
+            siteContext: siteContext ? {
+              organizationName: siteContext.organizationName,
+              industry: siteContext.industry,
+              targetAudience: siteContext.targetAudience,
+              brandVoice: siteContext.brandVoice,
+            } : undefined,
+            advanced: advanced ? {
+              targetScore: advanced.targetScore,
+              minWordCount: advanced.minWordCount,
+              maxWordCount: advanced.maxWordCount,
+            } : undefined,
           }
         }
       );
@@ -251,13 +286,13 @@ export function QuickOptimizeButton({
       setCurrentStep('Job started, waiting for updates...');
 
       // Start polling
-      pollJobStatus(newJobId); // Initial poll
+      pollJobStatus(newJobId);
       
       pollIntervalRef.current = setInterval(() => {
         if (mountedRef.current) {
           pollJobStatus(newJobId);
         }
-      }, 1000); // Poll every second
+      }, 1000);
 
     } catch (err) {
       console.error('[Optimize] Error:', err);
@@ -276,7 +311,7 @@ export function QuickOptimizeButton({
   };
 
   // ========================================================================
-  // CANCEL / RETRY
+  // CANCEL / RETRY / RESET
   // ========================================================================
   
   const handleCancel = () => {
@@ -348,7 +383,7 @@ export function QuickOptimizeButton({
   };
 
   // ========================================================================
-  // HELPER FUNCTIONS
+  // HELPERS
   // ========================================================================
   
   const formatTime = (seconds: number): string => {
@@ -365,6 +400,18 @@ export function QuickOptimizeButton({
   
   return (
     <div className="space-y-4">
+      {/* AI Status Badge */}
+      {state === 'idle' && (
+        <div className={`text-xs px-2 py-1 rounded-full inline-flex items-center gap-1 ${
+          isAiConfigured 
+            ? 'bg-green-100 text-green-700' 
+            : 'bg-amber-100 text-amber-700'
+        }`}>
+          <Settings className="w-3 h-3" />
+          {isAiConfigured ? `${ai.provider} configured` : 'AI not configured (fallback mode)'}
+        </div>
+      )}
+
       {/* Idle State - Show Button */}
       {state === 'idle' && (
         <Button
@@ -373,17 +420,19 @@ export function QuickOptimizeButton({
           className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold py-3"
         >
           <Zap className="w-5 h-5 mr-2" />
-          Quick Optimize
+          {isAiConfigured ? `Optimize with ${ai.provider}` : 'Quick Optimize (Fallback)'}
         </Button>
       )}
 
-      {/* Processing State - Show Progress */}
+      {/* Processing State */}
       {isProcessing && (
         <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200 space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
-              <span className="font-semibold text-blue-900">Optimizing...</span>
+              <span className="font-semibold text-blue-900">
+                Optimizing with {isAiConfigured ? ai.provider : 'fallback'}...
+              </span>
             </div>
             <div className="flex items-center gap-1 text-sm text-blue-600">
               <Clock className="w-4 h-4" />
@@ -446,7 +495,7 @@ export function QuickOptimizeButton({
         </div>
       )}
 
-      {/* Complete State - Show Results */}
+      {/* Complete State */}
       {state === 'complete' && result && (
         <div className="p-4 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border border-green-200">
           <div className="flex items-center gap-2 text-green-700 mb-3">
@@ -472,9 +521,9 @@ export function QuickOptimizeButton({
             )}
           </div>
 
-          {result.optimizedTitle && (
+          {(result.optimizedTitle || result.title) && (
             <p className="text-sm font-medium text-gray-900 mb-1">
-              {result.optimizedTitle}
+              {result.optimizedTitle || result.title}
             </p>
           )}
           
