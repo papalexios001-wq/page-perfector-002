@@ -1,18 +1,18 @@
 // ============================================================================
 // QUICK OPTIMIZE - ENTERPRISE-GRADE SOTA CONTENT OPTIMIZATION COMPONENT
-// Single-page AI-powered content optimization with real-time progress tracking
+// Version: 4.0.0 - FIXED: Now passes AI configuration to Edge Function
 // ============================================================================
 
-import { useConfigStore } from '@/stores/config-store';
 import { useState, useCallback, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { motion } from 'framer-motion';
-import { Zap, Loader2, Target, FileText, Send, CheckCircle2, AlertCircle, RefreshCw, ExternalLink } from 'lucide-react';
+import { Zap, Loader2, Target, FileText, Send, CheckCircle2, AlertCircle, RefreshCw, ExternalLink, Settings } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { usePagesStore } from '@/stores/pages-store';
+import { useConfigStore } from '@/stores/config-store'; // CRITICAL: Import config store
 import { toast } from 'sonner';
 import { invokeEdgeFunction, isSupabaseConfigured, getSupabaseStatus } from '@/lib/supabase';
 import { supabase } from '@/integrations/supabase/client';
@@ -20,7 +20,7 @@ import { useNavigate } from 'react-router-dom';
 import { BlogPostRenderer } from '../blog/BlogPostComponents';
 
 // ============================================================================
-// ERROR BOUNDARY - Catches React rendering errors gracefully
+// ERROR BOUNDARY
 // ============================================================================
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -87,15 +87,20 @@ interface JobData {
 
 interface OptimizationResult {
   title: string;
+  optimizedTitle?: string;
   optimizedContent?: string;
   content?: string;
   wordCount?: number;
   qualityScore?: number;
+  seoScore?: number;
+  readabilityScore?: number;
   sections?: Array<{ type: string; content?: string; data?: any }>;
   excerpt?: string;
   metaDescription?: string;
   author?: string;
   publishedAt?: string;
+  h1?: string;
+  h2s?: string[];
 }
 
 // ============================================================================
@@ -104,7 +109,9 @@ interface OptimizationResult {
 export function QuickOptimize() {
   const { addPages, updatePage, addActivityLog } = usePagesStore();
   const navigate = useNavigate();
-  const { ai } = useConfigStore();
+  
+  // CRITICAL: Get AI configuration from store
+  const { ai, wordpress, siteContext, advanced } = useConfigStore();
   
   // Form State
   const [pageUrl, setPageUrl] = useState('');
@@ -149,12 +156,15 @@ export function QuickOptimize() {
     };
   }, []);
 
+  // Check if AI is configured
+  const isAiConfigured = Boolean(ai.apiKey && ai.provider && ai.model);
+
   // ========================================================================
-  // POLL JOB STATUS BY JOB ID (not page_id since page might not exist in DB)
+  // POLL JOB STATUS
   // ========================================================================
   const pollJobStatus = useCallback(async (currentJobId: string) => {
     if (!pollingActiveRef.current || !mountedRef.current) {
-      console.log('[QuickOptimize Poll] Polling stopped (not active or unmounted)');
+      console.log('[QuickOptimize Poll] Polling stopped');
       return;
     }
 
@@ -169,7 +179,6 @@ export function QuickOptimize() {
 
       if (queryError) {
         console.error('[QuickOptimize Poll] Query error:', queryError);
-        // Don't stop polling on query error, might be temporary
         return;
       }
 
@@ -208,11 +217,12 @@ export function QuickOptimize() {
               keyword: targetKeyword || 'auto-detected', 
               outputMode,
               qualityScore: result.qualityScore,
+              wordCount: result.wordCount,
             },
           });
 
           toast.success('Optimization Complete!', {
-            description: `Quality Score: ${result.qualityScore || 85}/100`,
+            description: `Quality Score: ${result.qualityScore || 'N/A'}/100 • Words: ${result.wordCount || 'N/A'}`,
           });
 
           setIsComplete(true);
@@ -252,7 +262,7 @@ export function QuickOptimize() {
   }, [pageUrl, targetKeyword, outputMode, addActivityLog]);
 
   // ========================================================================
-  // HANDLE OPTIMIZE
+  // HANDLE OPTIMIZE - NOW PASSES AI CONFIG!
   // ========================================================================
   const handleOptimize = async () => {
     // Validation
@@ -268,6 +278,13 @@ export function QuickOptimize() {
       return;
     }
 
+    // Warn if AI not configured
+    if (!isAiConfigured) {
+      toast.warning('AI Provider not configured', {
+        description: 'Using fallback content. Configure AI in the Configuration tab for real AI-generated content.',
+      });
+    }
+
     // Reset state
     setIsOptimizing(true);
     setProgress(0);
@@ -281,29 +298,54 @@ export function QuickOptimize() {
       setStatusMessage('Calling optimization service...');
       setProgress(5);
 
-      // Call edge function
+      // ====================================================================
+      // CRITICAL FIX: Build AI config payload to pass to Edge Function
+      // ====================================================================
+      const aiConfigPayload = isAiConfigured ? {
+        provider: ai.provider,
+        apiKey: ai.apiKey,
+        model: ai.model,
+      } : undefined;
+
+      console.log('[QuickOptimize] AI Config:', {
+        provider: ai.provider,
+        hasApiKey: !!ai.apiKey,
+        model: ai.model,
+        isConfigured: isAiConfigured,
+      });
+
+      // Call edge function WITH AI CONFIG
       console.log('[QuickOptimize] Invoking optimize-content edge function...');
-// Around line 130 in handleOptimize function, replace the invokeEdgeFunction call:
-
-const { data, error: invokeError } = await invokeEdgeFunction<{
-  success: boolean;
-  jobId?: string;
-  message?: string;
-  error?: string;
-}>('optimize-content', {
-  url: pageUrl,
-  siteUrl: pageUrl,
-  postTitle: targetKeyword || pageUrl,
-  keyword: targetKeyword || undefined,
-  outputMode: outputMode,
-  // CRITICAL: Pass AI configuration
-  aiConfig: {
-    provider: ai.provider,
-    apiKey: ai.apiKey,
-    model: ai.model,
-  },
-});
-
+      const { data, error: invokeError } = await invokeEdgeFunction<{
+        success: boolean;
+        jobId?: string;
+        message?: string;
+        error?: string;
+      }>('optimize-content', {
+        url: pageUrl,
+        siteUrl: pageUrl,
+        postTitle: targetKeyword || pageUrl,
+        keyword: targetKeyword || undefined,
+        outputMode: outputMode,
+        // ================================================================
+        // CRITICAL: Pass the AI configuration!
+        // ================================================================
+        aiConfig: aiConfigPayload,
+        // Also pass other useful context
+        siteContext: siteContext ? {
+          organizationName: siteContext.organizationName,
+          industry: siteContext.industry,
+          targetAudience: siteContext.targetAudience,
+          brandVoice: siteContext.brandVoice,
+        } : undefined,
+        advanced: advanced ? {
+          targetScore: advanced.targetScore,
+          minWordCount: advanced.minWordCount,
+          maxWordCount: advanced.maxWordCount,
+          enableFaqs: advanced.enableFaqs,
+          enableKeyTakeaways: advanced.enableKeyTakeaways,
+        } : undefined,
+      });
 
       console.log('[QuickOptimize] Edge function response:', data, invokeError);
 
@@ -325,25 +367,22 @@ const { data, error: invokeError } = await invokeEdgeFunction<{
       setStatusMessage('Optimization in progress...');
       setProgress(10);
 
-      // Add to activity log
       addActivityLog({
         type: 'info',
         pageUrl,
-        message: 'Quick optimization started',
-        details: { keyword: targetKeyword || 'auto-detect', outputMode, jobId: newJobId },
+        message: `Quick optimization started with ${isAiConfigured ? ai.provider : 'fallback'} AI`,
+        details: { keyword: targetKeyword || 'auto-detect', outputMode, jobId: newJobId, aiProvider: ai.provider },
       });
 
-      // Start polling BY JOB ID
+      // Start polling
       pollingActiveRef.current = true;
       
-      // Initial poll after short delay
       setTimeout(() => {
         if (pollingActiveRef.current && mountedRef.current) {
           pollJobStatus(newJobId);
         }
       }, 500);
       
-      // Continue polling every 1 second
       pollingRef.current = setInterval(() => {
         if (pollingActiveRef.current && mountedRef.current) {
           pollJobStatus(newJobId);
@@ -400,7 +439,7 @@ const { data, error: invokeError } = await invokeEdgeFunction<{
     if (!blogPost) return null;
     
     return {
-      title: blogPost.title || 'Optimized Post',
+      title: blogPost.title || blogPost.optimizedTitle || 'Optimized Post',
       author: blogPost.author || 'AI Content Expert',
       publishedAt: blogPost.publishedAt || new Date().toISOString(),
       excerpt: blogPost.excerpt || blogPost.metaDescription || '',
@@ -435,13 +474,40 @@ const { data, error: invokeError } = await invokeEdgeFunction<{
           </div>
         )}
 
+        {/* AI Not Configured Warning */}
+        {!isAiConfigured && !configError && (
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-start gap-2">
+              <Settings className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-blue-900">AI Provider Not Configured</p>
+                <p className="text-xs text-blue-700 mt-1">
+                  Go to the <strong>Configuration</strong> tab to set up your AI provider (Google, OpenAI, etc.) for real AI-generated content.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* AI Configured Success Badge */}
+        {isAiConfigured && (
+          <div className="p-2 bg-green-50 border border-green-200 rounded-lg">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-green-600" />
+              <p className="text-xs text-green-800">
+                <strong>{ai.provider}</strong> configured • Model: <strong>{ai.model}</strong>
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Input Form - Show when not complete */}
         {!isComplete && (
           <>
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Page URL *</Label>
+              <Label className="text-xs text-muted-foreground">Page URL / Topic *</Label>
               <Input
-                placeholder="/your-page or https://site.com/page"
+                placeholder="/your-page or a topic like 'best running shoes 2025'"
                 value={pageUrl}
                 onChange={(e) => setPageUrl(e.target.value)}
                 className="bg-muted/50"
@@ -450,11 +516,11 @@ const { data, error: invokeError } = await invokeEdgeFunction<{
             </div>
 
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Target Keyword</Label>
+              <Label className="text-xs text-muted-foreground">Target Keyword (optional)</Label>
               <div className="relative">
                 <Target className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
-                  placeholder="(auto-detect)"
+                  placeholder="(auto-detect from URL/topic)"
                   value={targetKeyword}
                   onChange={(e) => setTargetKeyword(e.target.value)}
                   className="bg-muted/50 pl-10"
@@ -553,8 +619,9 @@ const { data, error: invokeError } = await invokeEdgeFunction<{
               <div className="flex-1">
                 <p className="text-sm font-medium text-green-900">Optimization Complete!</p>
                 <p className="text-xs text-green-700 mt-1">
-                  Quality Score: {blogPost.qualityScore || 85}/100 • 
-                  Words: {blogPost.wordCount || '2000+'}
+                  Quality Score: {blogPost.qualityScore || 'N/A'}/100 • 
+                  Words: {blogPost.wordCount || 'N/A'} •
+                  SEO: {blogPost.seoScore || 'N/A'}/100
                 </p>
               </div>
             </div>
@@ -574,7 +641,7 @@ const { data, error: invokeError } = await invokeEdgeFunction<{
             ) : (
               <Zap className="w-4 h-4" />
             )}
-            {isOptimizing ? 'Optimizing...' : 'Optimize Now'}
+            {isOptimizing ? 'Optimizing...' : isAiConfigured ? `Optimize with ${ai.provider}` : 'Optimize (Fallback)'}
           </Button>
         ) : (
           <Button
