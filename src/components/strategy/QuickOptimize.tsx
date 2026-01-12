@@ -1,6 +1,5 @@
 // ============================================================================
-// QUICK OPTIMIZE - ENTERPRISE-GRADE SOTA CONTENT OPTIMIZATION COMPONENT
-// Version: 4.0.0 - FIXED: Now passes AI configuration to Edge Function
+// QUICK OPTIMIZE - FIXED VERSION THAT PASSES AI CONFIG
 // ============================================================================
 
 import { useState, useCallback, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
@@ -12,16 +11,14 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { usePagesStore } from '@/stores/pages-store';
-import { useConfigStore } from '@/stores/config-store'; // CRITICAL: Import config store
+import { useConfigStore } from '@/stores/config-store'; // ← ADD THIS IMPORT
 import { toast } from 'sonner';
 import { invokeEdgeFunction, isSupabaseConfigured, getSupabaseStatus } from '@/lib/supabase';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
 import { BlogPostRenderer } from '../blog/BlogPostComponents';
 
-// ============================================================================
-// ERROR BOUNDARY
-// ============================================================================
+// Error Boundary (unchanged)
 interface ErrorBoundaryProps {
   children: ReactNode;
   onReset?: () => void;
@@ -73,9 +70,7 @@ class RenderErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 }
 
-// ============================================================================
-// TYPES
-// ============================================================================
+// Types
 interface JobData {
   id: string;
   status: 'pending' | 'queued' | 'running' | 'completed' | 'failed';
@@ -108,10 +103,8 @@ interface OptimizationResult {
 // ============================================================================
 export function QuickOptimize() {
   const { addPages, updatePage, addActivityLog } = usePagesStore();
+  const { ai } = useConfigStore(); // ← ADD THIS LINE
   const navigate = useNavigate();
-  
-  // CRITICAL: Get AI configuration from store
-  const { ai, wordpress, siteContext, advanced } = useConfigStore();
   
   // Form State
   const [pageUrl, setPageUrl] = useState('');
@@ -133,13 +126,13 @@ export function QuickOptimize() {
   const pollingActiveRef = useRef(false);
   const mountedRef = useRef(true);
 
-  // ========================================================================
-  // CHECK CONFIGURATION ON MOUNT
-  // ========================================================================
+  // Check if AI is configured
+  const isAiConfigured = Boolean(ai.apiKey && ai.provider && ai.model);
+
+  // Check configuration on mount
   useEffect(() => {
     mountedRef.current = true;
     
-    // Check Supabase configuration
     if (!isSupabaseConfigured()) {
       const status = getSupabaseStatus();
       console.error('[QuickOptimize] Supabase not configured:', status);
@@ -156,49 +149,31 @@ export function QuickOptimize() {
     };
   }, []);
 
-  // Check if AI is configured
-  const isAiConfigured = Boolean(ai.apiKey && ai.provider && ai.model);
-
-  // ========================================================================
-  // POLL JOB STATUS
-  // ========================================================================
+  // Poll job status
   const pollJobStatus = useCallback(async (currentJobId: string) => {
     if (!pollingActiveRef.current || !mountedRef.current) {
-      console.log('[QuickOptimize Poll] Polling stopped');
       return;
     }
 
     try {
-      console.log('[QuickOptimize Poll] Checking job:', currentJobId);
-      
       const { data: jobData, error: queryError } = await supabase
         .from('jobs')
         .select('*')
         .eq('id', currentJobId)
         .single();
 
-      if (queryError) {
-        console.error('[QuickOptimize Poll] Query error:', queryError);
-        return;
-      }
-
-      if (!jobData) {
-        console.warn('[QuickOptimize Poll] Job not found:', currentJobId);
+      if (queryError || !jobData) {
         return;
       }
 
       const job = jobData as JobData;
-      console.log(`[QuickOptimize Poll] Status: ${job.status}, Progress: ${job.progress}%`);
       
       if (mountedRef.current) {
         setProgress(job.progress || 0);
         setStatusMessage(job.current_step || 'Processing...');
       }
 
-      // Handle completion
       if (job.status === 'completed') {
-        console.log('[QuickOptimize Poll] Job completed!', job.result);
-        
         pollingActiveRef.current = false;
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
@@ -206,8 +181,7 @@ export function QuickOptimize() {
         }
 
         if (mountedRef.current && job.result) {
-          const result = job.result;
-          setBlogPost(result);
+          setBlogPost(job.result);
           
           addActivityLog({
             type: 'success',
@@ -216,13 +190,13 @@ export function QuickOptimize() {
             details: { 
               keyword: targetKeyword || 'auto-detected', 
               outputMode,
-              qualityScore: result.qualityScore,
-              wordCount: result.wordCount,
+              qualityScore: job.result.qualityScore,
+              wordCount: job.result.wordCount,
             },
           });
 
           toast.success('Optimization Complete!', {
-            description: `Quality Score: ${result.qualityScore || 'N/A'}/100 • Words: ${result.wordCount || 'N/A'}`,
+            description: `Quality Score: ${job.result.qualityScore || 'N/A'}/100 • Words: ${job.result.wordCount || 'N/A'}`,
           });
 
           setIsComplete(true);
@@ -230,10 +204,7 @@ export function QuickOptimize() {
         }
       }
 
-      // Handle failure
       if (job.status === 'failed') {
-        console.error('[QuickOptimize Poll] Job failed:', job.error_message);
-        
         pollingActiveRef.current = false;
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
@@ -245,12 +216,6 @@ export function QuickOptimize() {
           setIsOptimizing(false);
           setIsComplete(true);
 
-          addActivityLog({
-            type: 'error',
-            pageUrl,
-            message: `Optimization failed: ${job.error_message}`,
-          });
-
           toast.error('Optimization Failed', {
             description: job.error_message || 'Check console for details',
           });
@@ -261,27 +226,22 @@ export function QuickOptimize() {
     }
   }, [pageUrl, targetKeyword, outputMode, addActivityLog]);
 
-  // ========================================================================
-  // HANDLE OPTIMIZE - NOW PASSES AI CONFIG!
-  // ========================================================================
+  // Handle optimize
   const handleOptimize = async () => {
-    // Validation
     if (!pageUrl.trim()) {
-      toast.error('Please enter a page URL');
+      toast.error('Please enter a page URL or topic');
       return;
     }
 
     if (!isSupabaseConfigured()) {
-      toast.error('Backend not configured', {
-        description: 'Please set up Supabase environment variables.',
-      });
+      toast.error('Backend not configured');
       return;
     }
 
     // Warn if AI not configured
     if (!isAiConfigured) {
       toast.warning('AI Provider not configured', {
-        description: 'Using fallback content. Configure AI in the Configuration tab for real AI-generated content.',
+        description: 'Go to Configuration tab to set up AI. Using fallback content.',
       });
     }
 
@@ -299,7 +259,7 @@ export function QuickOptimize() {
       setProgress(5);
 
       // ====================================================================
-      // CRITICAL FIX: Build AI config payload to pass to Edge Function
+      // CRITICAL FIX: Build AI config payload
       // ====================================================================
       const aiConfigPayload = isAiConfigured ? {
         provider: ai.provider,
@@ -307,7 +267,7 @@ export function QuickOptimize() {
         model: ai.model,
       } : undefined;
 
-      console.log('[QuickOptimize] AI Config:', {
+      console.log('[QuickOptimize] Starting optimization with AI config:', {
         provider: ai.provider,
         hasApiKey: !!ai.apiKey,
         model: ai.model,
@@ -315,7 +275,6 @@ export function QuickOptimize() {
       });
 
       // Call edge function WITH AI CONFIG
-      console.log('[QuickOptimize] Invoking optimize-content edge function...');
       const { data, error: invokeError } = await invokeEdgeFunction<{
         success: boolean;
         jobId?: string;
@@ -324,6 +283,7 @@ export function QuickOptimize() {
       }>('optimize-content', {
         url: pageUrl,
         siteUrl: pageUrl,
+        mode: 'optimize',
         postTitle: targetKeyword || pageUrl,
         keyword: targetKeyword || undefined,
         outputMode: outputMode,
@@ -331,20 +291,6 @@ export function QuickOptimize() {
         // CRITICAL: Pass the AI configuration!
         // ================================================================
         aiConfig: aiConfigPayload,
-        // Also pass other useful context
-        siteContext: siteContext ? {
-          organizationName: siteContext.organizationName,
-          industry: siteContext.industry,
-          targetAudience: siteContext.targetAudience,
-          brandVoice: siteContext.brandVoice,
-        } : undefined,
-        advanced: advanced ? {
-          targetScore: advanced.targetScore,
-          minWordCount: advanced.minWordCount,
-          maxWordCount: advanced.maxWordCount,
-          enableFaqs: advanced.enableFaqs,
-          enableKeyTakeaways: advanced.enableKeyTakeaways,
-        } : undefined,
       });
 
       console.log('[QuickOptimize] Edge function response:', data, invokeError);
@@ -362,7 +308,7 @@ export function QuickOptimize() {
       }
 
       const newJobId = data.jobId;
-      console.log('[QuickOptimize] Job created with ID:', newJobId);
+      console.log('[QuickOptimize] Job created:', newJobId);
       setJobId(newJobId);
       setStatusMessage('Optimization in progress...');
       setProgress(10);
@@ -371,7 +317,7 @@ export function QuickOptimize() {
         type: 'info',
         pageUrl,
         message: `Quick optimization started with ${isAiConfigured ? ai.provider : 'fallback'} AI`,
-        details: { keyword: targetKeyword || 'auto-detect', outputMode, jobId: newJobId, aiProvider: ai.provider },
+        details: { keyword: targetKeyword || 'auto-detect', outputMode, jobId: newJobId },
       });
 
       // Start polling
@@ -393,28 +339,19 @@ export function QuickOptimize() {
       console.error('[QuickOptimize] Error:', err);
       
       if (mountedRef.current) {
-        const errorMessage = err.message || 'An unexpected error occurred';
         setStatusMessage('Optimization failed');
-        setError(errorMessage);
+        setError(err.message || 'An unexpected error occurred');
         setIsOptimizing(false);
         setIsComplete(true);
 
-        addActivityLog({
-          type: 'error',
-          pageUrl,
-          message: `Optimization failed: ${errorMessage}`,
-        });
-
         toast.error('Optimization Failed', {
-          description: errorMessage,
+          description: err.message,
         });
       }
     }
   };
 
-  // ========================================================================
-  // HANDLE RESET
-  // ========================================================================
+  // Handle reset
   const handleReset = () => {
     setPageUrl('');
     setTargetKeyword('');
@@ -432,9 +369,7 @@ export function QuickOptimize() {
     }
   };
 
-  // ========================================================================
-  // NORMALIZE BLOG POST FOR RENDERING
-  // ========================================================================
+  // Normalize blog post for rendering
   const getNormalizedPost = () => {
     if (!blogPost) return null;
     
@@ -444,7 +379,7 @@ export function QuickOptimize() {
       publishedAt: blogPost.publishedAt || new Date().toISOString(),
       excerpt: blogPost.excerpt || blogPost.metaDescription || '',
       sections: Array.isArray(blogPost.sections) ? blogPost.sections : [
-        { type: 'paragraph' as const, content: blogPost.content || blogPost.optimizedContent || 'Content generated successfully.' }
+        { type: 'paragraph' as const, content: blogPost.content || blogPost.optimizedContent || 'Content generated.' }
       ],
     };
   };
@@ -474,40 +409,36 @@ export function QuickOptimize() {
           </div>
         )}
 
-        {/* AI Not Configured Warning */}
-        {!isAiConfigured && !configError && (
-          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <div className="flex items-start gap-2">
-              <Settings className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-medium text-blue-900">AI Provider Not Configured</p>
-                <p className="text-xs text-blue-700 mt-1">
-                  Go to the <strong>Configuration</strong> tab to set up your AI provider (Google, OpenAI, etc.) for real AI-generated content.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* AI Configured Success Badge */}
-        {isAiConfigured && (
-          <div className="p-2 bg-green-50 border border-green-200 rounded-lg">
+        {/* AI Configuration Status */}
+        {!configError && (
+          <div className={`p-2 rounded-lg border ${isAiConfigured ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-600" />
-              <p className="text-xs text-green-800">
-                <strong>{ai.provider}</strong> configured • Model: <strong>{ai.model}</strong>
-              </p>
+              {isAiConfigured ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-green-600" />
+                  <p className="text-xs text-green-800">
+                    <strong>{ai.provider}</strong> configured • Model: <strong>{ai.model}</strong>
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Settings className="w-4 h-4 text-blue-600" />
+                  <p className="text-xs text-blue-800">
+                    AI not configured. <strong>Go to Configuration tab</strong> to enable real AI content.
+                  </p>
+                </>
+              )}
             </div>
           </div>
         )}
 
-        {/* Input Form - Show when not complete */}
+        {/* Input Form */}
         {!isComplete && (
           <>
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Page URL / Topic *</Label>
               <Input
-                placeholder="/your-page or a topic like 'best running shoes 2025'"
+                placeholder="Enter a URL or topic like 'best running shoes 2025'"
                 value={pageUrl}
                 onChange={(e) => setPageUrl(e.target.value)}
                 className="bg-muted/50"
@@ -601,7 +532,7 @@ export function QuickOptimize() {
               <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-sm font-medium text-red-900">Optimization Failed</p>
-                <p className="text-xs text-red-700 mt-1 break-words">{error}</p>
+                <p className="text-xs text-red-700 mt-1">{error}</p>
               </div>
             </div>
           </motion.div>
@@ -619,7 +550,7 @@ export function QuickOptimize() {
               <div className="flex-1">
                 <p className="text-sm font-medium text-green-900">Optimization Complete!</p>
                 <p className="text-xs text-green-700 mt-1">
-                  Quality Score: {blogPost.qualityScore || 'N/A'}/100 • 
+                  Quality: {blogPost.qualityScore || 'N/A'}/100 • 
                   Words: {blogPost.wordCount || 'N/A'} •
                   SEO: {blogPost.seoScore || 'N/A'}/100
                 </p>
