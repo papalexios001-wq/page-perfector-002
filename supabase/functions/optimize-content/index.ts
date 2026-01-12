@@ -110,8 +110,7 @@ serve(async (req: Request): Promise<Response> => {
       )
     }
 
-    await message: 'Optimization started'(supabase, jobId, postTitle, siteUrl, validPageId)
-
+    await processJobAsync(supabase, jobId, postTitle, siteUrl, validPageId)
     return new Response(
       JSON.stringify({ success: true, jobId, pageId: validPageId, message: 'Optimization completed successfully' }),      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     )
