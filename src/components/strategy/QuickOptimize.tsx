@@ -3,6 +3,7 @@
 // Single-page AI-powered content optimization with real-time progress tracking
 // ============================================================================
 
+import { useConfigStore } from '@/stores/config-store';
 import { useState, useCallback, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { Zap, Loader2, Target, FileText, Send, CheckCircle2, AlertCircle, RefreshCw, ExternalLink } from 'lucide-react';
@@ -103,6 +104,7 @@ interface OptimizationResult {
 export function QuickOptimize() {
   const { addPages, updatePage, addActivityLog } = usePagesStore();
   const navigate = useNavigate();
+  const { ai } = useConfigStore();
   
   // Form State
   const [pageUrl, setPageUrl] = useState('');
@@ -281,18 +283,27 @@ export function QuickOptimize() {
 
       // Call edge function
       console.log('[QuickOptimize] Invoking optimize-content edge function...');
-      const { data, error: invokeError } = await invokeEdgeFunction<{
-        success: boolean;
-        jobId?: string;
-        message?: string;
-        error?: string;
-      }>('optimize-content', {
-        url: pageUrl,
-        mode: 'optimize',
-        postTitle: targetKeyword || `Optimized: ${pageUrl}`,
-        keyword: targetKeyword || undefined,
-        outputMode: outputMode,
-      });
+// Around line 130 in handleOptimize function, replace the invokeEdgeFunction call:
+
+const { data, error: invokeError } = await invokeEdgeFunction<{
+  success: boolean;
+  jobId?: string;
+  message?: string;
+  error?: string;
+}>('optimize-content', {
+  url: pageUrl,
+  siteUrl: pageUrl,
+  postTitle: targetKeyword || pageUrl,
+  keyword: targetKeyword || undefined,
+  outputMode: outputMode,
+  // CRITICAL: Pass AI configuration
+  aiConfig: {
+    provider: ai.provider,
+    apiKey: ai.apiKey,
+    model: ai.model,
+  },
+});
+
 
       console.log('[QuickOptimize] Edge function response:', data, invokeError);
 
