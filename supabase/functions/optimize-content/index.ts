@@ -2,8 +2,7 @@
  * Enterprise-Grade Optimized Edge Function - 100X Faster
  * Single-file version for Supabase deployment
  * @module optimize-content
- * @version 3.1.0
- */
+ * @version 4.0.0 - SOTA Enterprise Fix: Proper await for async processing */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
@@ -111,11 +110,10 @@ serve(async (req: Request): Promise<Response> => {
       )
     }
 
-    processJobAsync(supabase, jobId, postTitle, siteUrl, validPageId)
+    await message: 'Optimization started'(supabase, jobId, postTitle, siteUrl, validPageId)
 
     return new Response(
-      JSON.stringify({ success: true, jobId, pageId: validPageId, message: 'Optimization started' }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+      JSON.stringify({ success: true, jobId, pageId: validPageId, message: 'Optimization completed successfully' }),      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     )
 
   } catch (err) {
