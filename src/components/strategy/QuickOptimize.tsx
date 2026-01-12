@@ -77,10 +77,10 @@ class RenderErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
 // ============================================================================
 interface JobData {
   id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
   current_step: string;
-  result?: any;
+  result?: OptimizationResult;
   error_message?: string;
 }
 
@@ -148,12 +148,17 @@ export function QuickOptimize() {
   }, []);
 
   // ========================================================================
-  // POLL JOB STATUS
+  // POLL JOB STATUS BY JOB ID (not page_id since page might not exist in DB)
   // ========================================================================
-  const pollJobStatus = useCallback(async (currentJobId: string, pageId: string) => {
-    if (!pollingActiveRef.current || !mountedRef.current) return;
+  const pollJobStatus = useCallback(async (currentJobId: string) => {
+    if (!pollingActiveRef.current || !mountedRef.current) {
+      console.log('[QuickOptimize Poll] Polling stopped (not active or unmounted)');
+      return;
+    }
 
     try {
+      console.log('[QuickOptimize Poll] Checking job:', currentJobId);
+      
       const { data: jobData, error: queryError } = await supabase
         .from('jobs')
         .select('*')
@@ -162,6 +167,7 @@ export function QuickOptimize() {
 
       if (queryError) {
         console.error('[QuickOptimize Poll] Query error:', queryError);
+        // Don't stop polling on query error, might be temporary
         return;
       }
 
@@ -189,16 +195,9 @@ export function QuickOptimize() {
         }
 
         if (mountedRef.current && job.result) {
-          const result = job.result as OptimizationResult;
+          const result = job.result;
           setBlogPost(result);
           
-          updatePage(pageId, {
-            status: 'completed',
-            optimizedAt: new Date().toISOString(),
-            optimizedContent: JSON.stringify(result),
-            title: result.title || `Optimized: ${pageUrl}`,
-          });
-
           addActivityLog({
             type: 'success',
             pageUrl,
@@ -248,7 +247,7 @@ export function QuickOptimize() {
     } catch (err) {
       console.error('[QuickOptimize Poll] Exception:', err);
     }
-  }, [pageUrl, targetKeyword, outputMode, updatePage, addActivityLog]);
+  }, [pageUrl, targetKeyword, outputMode, addActivityLog]);
 
   // ========================================================================
   // HANDLE OPTIMIZE
@@ -277,33 +276,6 @@ export function QuickOptimize() {
     setJobId(null);
 
     try {
-      // Create page record
-      const pageSlug = pageUrl.replace(/^[/]+/, '').replace(/[/]+$/, '').trim() || 'quick-optimize';
-      const pageId = `qo-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-      
-      const newPage = {
-        id: pageId,
-        url: pageUrl,
-        slug: pageSlug,
-        title: `Quick Optimize: ${pageUrl}`,
-        wordCount: 0,
-        status: 'optimizing' as const,
-        postType: 'post',
-        categories: [],
-        tags: [],
-        retryCount: 0,
-      };
-
-      console.log('[QuickOptimize] Creating page record:', newPage);
-      addPages([newPage]);
-
-      addActivityLog({
-        type: 'info',
-        pageUrl,
-        message: 'Quick optimization started',
-        details: { keyword: targetKeyword || 'auto-detect', outputMode },
-      });
-
       setStatusMessage('Calling optimization service...');
       setProgress(5);
 
@@ -316,8 +288,6 @@ export function QuickOptimize() {
         error?: string;
       }>('optimize-content', {
         url: pageUrl,
-        pageId: pageId,
-        siteId: 'default',
         mode: 'optimize',
         postTitle: targetKeyword || `Optimized: ${pageUrl}`,
         keyword: targetKeyword || undefined,
@@ -344,18 +314,30 @@ export function QuickOptimize() {
       setStatusMessage('Optimization in progress...');
       setProgress(10);
 
-      // Start polling
+      // Add to activity log
+      addActivityLog({
+        type: 'info',
+        pageUrl,
+        message: 'Quick optimization started',
+        details: { keyword: targetKeyword || 'auto-detect', outputMode, jobId: newJobId },
+      });
+
+      // Start polling BY JOB ID
       pollingActiveRef.current = true;
       
-      // Initial poll
-      await pollJobStatus(newJobId, pageId);
-      
-      // Continue polling every 500ms
-      pollingRef.current = setInterval(() => {
+      // Initial poll after short delay
+      setTimeout(() => {
         if (pollingActiveRef.current && mountedRef.current) {
-          pollJobStatus(newJobId, pageId);
+          pollJobStatus(newJobId);
         }
       }, 500);
+      
+      // Continue polling every 1 second
+      pollingRef.current = setInterval(() => {
+        if (pollingActiveRef.current && mountedRef.current) {
+          pollJobStatus(newJobId);
+        }
+      }, 1000);
 
     } catch (err: any) {
       console.error('[QuickOptimize] Error:', err);
@@ -525,6 +507,9 @@ export function QuickOptimize() {
                 transition={{ duration: 0.3, ease: 'easeOut' }}
               />
             </div>
+            {jobId && (
+              <p className="text-xs text-muted-foreground/50 font-mono">Job: {jobId.slice(0, 8)}...</p>
+            )}
           </motion.div>
         )}
 
