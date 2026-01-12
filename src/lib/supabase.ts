@@ -1,6 +1,5 @@
 // ============================================================================
-// ENTERPRISE-GRADE SUPABASE UTILITIES - SOTA EDGE FUNCTION INVOCATION
-// Robust error handling, retry logic, and comprehensive logging
+// SUPABASE UTILITIES - EDGE FUNCTION INVOCATION
 // ============================================================================
 
 import { supabase, isConfigured } from '@/integrations/supabase/client';
@@ -30,163 +29,92 @@ export interface EdgeFunctionOptions {
 }
 
 // ============================================================================
-// EDGE FUNCTION INVOCATION - ENTERPRISE-GRADE
+// EDGE FUNCTION INVOCATION
 // ============================================================================
 export async function invokeEdgeFunction<T = unknown>(
   functionName: string,
   body: Record<string, unknown>,
   options: EdgeFunctionOptions = {}
 ): Promise<EdgeFunctionResult<T>> {
-  const { retries = 2, retryDelay = 1000, timeout = 30000 } = options;
-  
   console.log(`[invokeEdgeFunction] Calling: ${functionName}`);
-  console.log(`[invokeEdgeFunction] Body:`, JSON.stringify(body, null, 2));
+  console.log(`[invokeEdgeFunction] Body:`, body);
 
-  // ========================================================================
-  // PRE-FLIGHT CHECKS
-  // ========================================================================
-  
   // Check if Supabase is configured
   if (!isSupabaseConfigured()) {
     console.error('[invokeEdgeFunction] Supabase not configured!');
     return {
       data: null,
       error: {
-        message: 'Supabase not configured. Please check your environment variables (VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY).',
+        message: 'Supabase not configured. Please check your environment variables.',
         code: 'NOT_CONFIGURED',
       },
     };
   }
 
-  // CRITICAL: Verify supabase.functions exists and is callable
-  if (!supabase) {
-    console.error('[invokeEdgeFunction] Supabase client is undefined!');
+  // Verify supabase client exists
+  if (!supabase || !supabase.functions || typeof supabase.functions.invoke !== 'function') {
+    console.error('[invokeEdgeFunction] Supabase client not properly initialized');
     return {
       data: null,
       error: {
-        message: 'Supabase client is not initialized.',
-        code: 'CLIENT_UNDEFINED',
+        message: 'Supabase client not properly initialized.',
+        code: 'CLIENT_ERROR',
       },
     };
   }
 
-  if (!supabase.functions) {
-    console.error('[invokeEdgeFunction] supabase.functions is undefined!');
-    return {
-      data: null,
-      error: {
-        message: 'Supabase functions module is not available. This may be a client initialization issue.',
-        code: 'FUNCTIONS_UNDEFINED',
-      },
-    };
-  }
+  try {
+    console.log(`[invokeEdgeFunction] Invoking ${functionName}...`);
+    
+    // Call the edge function
+    const response = await supabase.functions.invoke(functionName, {
+      body: body,
+    });
 
-  if (typeof supabase.functions.invoke !== 'function') {
-    console.error('[invokeEdgeFunction] supabase.functions.invoke is not a function!');
-    console.error('[invokeEdgeFunction] Type of invoke:', typeof supabase.functions.invoke);
-    console.error('[invokeEdgeFunction] supabase.functions keys:', Object.keys(supabase.functions));
-    return {
-      data: null,
-      error: {
-        message: 'supabase.functions.invoke is not a function. The Supabase client may not be properly initialized.',
-        code: 'INVOKE_NOT_FUNCTION',
-      },
-    };
-  }
+    console.log(`[invokeEdgeFunction] Raw response:`, response);
 
-  // ========================================================================
-  // INVOKE WITH RETRY LOGIC
-  // ========================================================================
-  let lastError: Error | null = null;
-  
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      if (attempt > 0) {
-        console.log(`[invokeEdgeFunction] Retry attempt ${attempt}/${retries}`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
-      }
-
-      // Create abort controller for timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-      // Invoke the edge function
-      const { data, error } = await supabase.functions.invoke(functionName, {
-        body,
-      });
-
-      clearTimeout(timeoutId);
-
-      // Handle Supabase error
-      if (error) {
-        console.error(`[invokeEdgeFunction] Supabase error:`, error);
-        
-        // Check if it's a retryable error
-        const isRetryable = error.message?.includes('timeout') || 
-                           error.message?.includes('network') ||
-                           error.message?.includes('503') ||
-                           error.message?.includes('502');
-        
-        if (isRetryable && attempt < retries) {
-          lastError = new Error(error.message || 'Edge function error');
-          continue;
-        }
-        
-        return {
-          data: null,
-          error: {
-            message: error.message || 'Edge function invocation failed',
-            code: 'EDGE_FUNCTION_ERROR',
-            details: error,
-          },
-        };
-      }
-
-      // Success!
-      console.log(`[invokeEdgeFunction] Success! Response:`, data);
+    // Check for error in response
+    if (response.error) {
+      console.error(`[invokeEdgeFunction] Error from Supabase:`, response.error);
+      
+      // The error might contain the actual response data
+      // Supabase treats non-2xx as errors but the body might still be useful
+      const errorMessage = response.error.message || 'Edge function error';
+      
       return {
-        data: data as T,
-        error: null,
+        data: null,
+        error: {
+          message: errorMessage,
+          code: 'EDGE_FUNCTION_ERROR',
+          details: response.error,
+        },
       };
-
-    } catch (err) {
-      console.error(`[invokeEdgeFunction] Exception on attempt ${attempt}:`, err);
-      lastError = err instanceof Error ? err : new Error(String(err));
-      
-      // Check for abort (timeout)
-      if (err instanceof Error && err.name === 'AbortError') {
-        if (attempt < retries) continue;
-        return {
-          data: null,
-          error: {
-            message: `Request timed out after ${timeout}ms`,
-            code: 'TIMEOUT',
-          },
-        };
-      }
-      
-      // Continue to retry if we have attempts left
-      if (attempt < retries) continue;
     }
-  }
 
-  // All retries exhausted
-  return {
-    data: null,
-    error: {
-      message: lastError?.message || 'All retry attempts failed',
-      code: 'MAX_RETRIES_EXCEEDED',
-    },
-  };
+    // Success!
+    console.log(`[invokeEdgeFunction] Success! Data:`, response.data);
+    return {
+      data: response.data as T,
+      error: null,
+    };
+
+  } catch (err) {
+    console.error(`[invokeEdgeFunction] Exception:`, err);
+    return {
+      data: null,
+      error: {
+        message: err instanceof Error ? err.message : 'Unknown error',
+        code: 'EXCEPTION',
+        details: err,
+      },
+    };
+  }
 }
 
 // ============================================================================
 // CONVENIENCE FUNCTIONS
 // ============================================================================
 
-/**
- * Check if the Supabase backend is reachable
- */
 export async function checkSupabaseHealth(): Promise<boolean> {
   if (!isSupabaseConfigured()) return false;
   
@@ -198,9 +126,6 @@ export async function checkSupabaseHealth(): Promise<boolean> {
   }
 }
 
-/**
- * Get the current Supabase configuration status
- */
 export function getSupabaseStatus(): {
   configured: boolean;
   url: string;
