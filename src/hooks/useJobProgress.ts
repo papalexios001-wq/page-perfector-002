@@ -2,6 +2,7 @@
 // ============================================================================
 // SOTA ENTERPRISE-GRADE JOB PROGRESS HOOK
 // Real-time job status tracking with dynamic job watching
+// v2.0.0 - FIXED: Removed double polling (race condition eliminated)
 // ============================================================================
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -208,14 +209,6 @@ export function useJobProgress(
     // Initial fetch
     await fetchJobStatus(pageId);
 
-    // Start polling
-    pollRef.current = setInterval(() => {
-      if (activeRef.current && mountedRef.current) {
-        fetchJobStatus(pageId);
-      }
-    }, pollingInterval);
-
-    console.log('[useJobProgress] Polling started with interval:', pollingInterval);
   }, [cleanup, fetchJobStatus, pollingInterval]);
 
   // ============================================================================
