@@ -1,42 +1,108 @@
 // src/hooks/useJobProgress.ts
 // ============================================================================
-// JOB PROGRESS HOOK - Real-time job status tracking
+// SOTA ENTERPRISE-GRADE JOB PROGRESS HOOK
+// Real-time job status tracking with dynamic job watching
 // ============================================================================
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 
-interface JobProgress {
+// ============================================================================
+// TYPES
+// ============================================================================
+interface JobData {
   id: string;
+  page_id?: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  progress: number;
+  current_step: string;
+  result?: unknown;
+  error_message?: string;
+  created_at?: string;
+  completed_at?: string;
+}
+
+interface ActiveJob {
+  id: string;
+  pageId?: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
   progress: number;
   currentStep: string;
-  result?: any;
-  error?: string;
+  result?: unknown;
+  errorMessage?: string;
 }
 
 interface UseJobProgressOptions {
   pollingInterval?: number;
-  onComplete?: (result: any) => void;
-  onError?: (error: string) => void;
+  onComplete?: (job: ActiveJob) => void;
+  onError?: (job: ActiveJob) => void;
+  onProgress?: (job: ActiveJob) => void;
 }
 
+interface UseJobProgressReturn {
+  // State
+  activeJob: ActiveJob | null;
+  currentStepIndex: number;
+  isRunning: boolean;
+  isCompleted: boolean;
+  isFailed: boolean;
+  isLoading: boolean;
+  
+  // Actions
+  watchJob: (pageId: string) => Promise<void>;
+  stopWatching: () => void;
+  
+  // Legacy compatibility
+  job: ActiveJob | null;
+  progress: number;
+  currentStep: string;
+  status: string;
+  result: unknown;
+  error: string | undefined;
+}
+
+// ============================================================================
+// STEP INDEX CALCULATION
+// Maps progress percentage to step index (0-5 scale)
+// ============================================================================
+function calculateStepIndex(progress: number): number {
+  if (progress <= 0) return 0;
+  if (progress < 15) return 0;  // Starting
+  if (progress < 30) return 1;  // Fetching content
+  if (progress < 50) return 2;  // Analyzing
+  if (progress < 70) return 3;  // Generating
+  if (progress < 90) return 4;  // Optimizing
+  return 5;                      // Finalizing/Complete
+}
+
+// ============================================================================
+// MAIN HOOK
+// ============================================================================
 export function useJobProgress(
-  jobId: string | null,
   options: UseJobProgressOptions = {}
-) {
+): UseJobProgressReturn {
   const { 
     pollingInterval = 500, 
     onComplete, 
-    onError 
+    onError,
+    onProgress 
   } = options;
 
-  const [job, setJob] = useState<JobProgress | null>(null);
+  // State
+  const [activeJob, setActiveJob] = useState<ActiveJob | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const [watchingPageId, setWatchingPageId] = useState<string | null>(null);
+  
+  // Refs for cleanup and tracking
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeRef = useRef(false);
+  const mountedRef = useRef(true);
 
+  // ============================================================================
+  // CLEANUP FUNCTION
+  // ============================================================================
   const cleanup = useCallback(() => {
+    console.log('[useJobProgress] Cleaning up...');
     activeRef.current = false;
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -44,87 +110,178 @@ export function useJobProgress(
     }
   }, []);
 
-  const fetchJobStatus = useCallback(async (id: string) => {
-    if (!activeRef.current) return;
+  // ============================================================================
+  // STOP WATCHING - Public method to stop job tracking
+  // ============================================================================
+  const stopWatching = useCallback(() => {
+    console.log('[useJobProgress] Stop watching called');
+    cleanup();
+    setWatchingPageId(null);
+    setIsLoading(false);
+  }, [cleanup]);
+
+  // ============================================================================
+  // FETCH JOB STATUS - Core polling function
+  // ============================================================================
+  const fetchJobStatus = useCallback(async (pageId: string) => {
+    if (!activeRef.current || !mountedRef.current) return;
 
     try {
+      // Query for the latest job associated with this page
       const { data, error } = await supabase
         .from('jobs')
         .select('*')
-        .eq('id', id)
-        .single();
+        .eq('page_id', pageId)
+        .order('created_at', { ascending: false })
+        .limit(1);
 
       if (error) {
         console.error('[useJobProgress] Fetch error:', error);
         return;
       }
 
-      if (!data) return;
+      if (!data || data.length === 0) {
+        // No job found yet - might still be creating
+        console.log('[useJobProgress] No job found for page:', pageId);
+        return;
+      }
 
-      const jobProgress: JobProgress = {
-        id: data.id,
-        status: data.status,
-        progress: data.progress || 0,
-        currentStep: data.current_step || 'Processing...',
-        result: data.result,
-        error: data.error_message,
+      const jobData = data[0] as JobData;
+      
+      const job: ActiveJob = {
+        id: jobData.id,
+        pageId: jobData.page_id,
+        status: jobData.status,
+        progress: jobData.progress || 0,
+        currentStep: jobData.current_step || 'Processing...',
+        result: jobData.result,
+        errorMessage: jobData.error_message,
       };
 
-      setJob(jobProgress);
+      if (mountedRef.current) {
+        setActiveJob(job);
+        onProgress?.(job);
+      }
 
       // Handle completion
-      if (data.status === 'completed') {
+      if (jobData.status === 'completed') {
+        console.log('[useJobProgress] Job completed:', jobData.id);
         cleanup();
-        setIsLoading(false);
-        onComplete?.(data.result);
+        if (mountedRef.current) {
+          setIsLoading(false);
+          setWatchingPageId(null);
+        }
+        onComplete?.(job);
       }
 
       // Handle failure
-      if (data.status === 'failed') {
+      if (jobData.status === 'failed') {
+        console.log('[useJobProgress] Job failed:', jobData.id, jobData.error_message);
         cleanup();
-        setIsLoading(false);
-        onError?.(data.error_message || 'Job failed');
+        if (mountedRef.current) {
+          setIsLoading(false);
+          setWatchingPageId(null);
+        }
+        onError?.(job);
       }
 
     } catch (err) {
       console.error('[useJobProgress] Exception:', err);
     }
-  }, [cleanup, onComplete, onError]);
+  }, [cleanup, onComplete, onError, onProgress]);
 
-  useEffect(() => {
-    if (!jobId) {
-      cleanup();
-      setJob(null);
-      return;
-    }
-
+  // ============================================================================
+  // WATCH JOB - Public method to start tracking a job by page ID
+  // ============================================================================
+  const watchJob = useCallback(async (pageId: string) => {
+    console.log('[useJobProgress] Watch job called for page:', pageId);
+    
+    // Clean up any existing polling
+    cleanup();
+    
+    // Reset state
+    setActiveJob(null);
     setIsLoading(true);
+    setWatchingPageId(pageId);
     activeRef.current = true;
 
     // Initial fetch
-    fetchJobStatus(jobId);
+    await fetchJobStatus(pageId);
 
     // Start polling
     pollRef.current = setInterval(() => {
-      if (activeRef.current) {
-        fetchJobStatus(jobId);
+      if (activeRef.current && mountedRef.current) {
+        fetchJobStatus(pageId);
       }
     }, pollingInterval);
 
-    return cleanup;
-  }, [jobId, pollingInterval, fetchJobStatus, cleanup]);
+    console.log('[useJobProgress] Polling started with interval:', pollingInterval);
+  }, [cleanup, fetchJobStatus, pollingInterval]);
 
+  // ============================================================================
+  // EFFECT: Watch for pageId changes
+  // ============================================================================
+  useEffect(() => {
+    if (watchingPageId) {
+      activeRef.current = true;
+      
+      // Start polling
+      pollRef.current = setInterval(() => {
+        if (activeRef.current && mountedRef.current) {
+          fetchJobStatus(watchingPageId);
+        }
+      }, pollingInterval);
+    }
+
+    return () => {
+      // Don't cleanup on every effect run, only on unmount
+    };
+  }, [watchingPageId, pollingInterval, fetchJobStatus]);
+
+  // ============================================================================
+  // EFFECT: Cleanup on unmount
+  // ============================================================================
+  useEffect(() => {
+    mountedRef.current = true;
+    
+    return () => {
+      console.log('[useJobProgress] Component unmounting, cleaning up...');
+      mountedRef.current = false;
+      cleanup();
+    };
+  }, [cleanup]);
+
+  // ============================================================================
+  // COMPUTED VALUES
+  // ============================================================================
+  const currentStepIndex = calculateStepIndex(activeJob?.progress || 0);
+  const isRunning = activeJob?.status === 'running';
+  const isCompleted = activeJob?.status === 'completed';
+  const isFailed = activeJob?.status === 'failed';
+
+  // ============================================================================
+  // RETURN VALUE
+  // ============================================================================
   return {
-    job,
+    // Primary state
+    activeJob,
+    currentStepIndex,
+    isRunning,
+    isCompleted,
+    isFailed,
     isLoading,
-    progress: job?.progress || 0,
-    currentStep: job?.currentStep || '',
-    status: job?.status || 'pending',
-    result: job?.result,
-    error: job?.error,
-    isComplete: job?.status === 'completed',
-    isFailed: job?.status === 'failed',
-    isRunning: job?.status === 'running',
+    
+    // Actions
+    watchJob,
+    stopWatching,
+    
+    // Legacy compatibility (for components using old interface)
+    job: activeJob,
+    progress: activeJob?.progress || 0,
+    currentStep: activeJob?.currentStep || '',
+    status: activeJob?.status || 'pending',
+    result: activeJob?.result,
+    error: activeJob?.errorMessage,
   };
 }
 
