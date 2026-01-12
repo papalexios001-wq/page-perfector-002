@@ -274,24 +274,35 @@ export function QuickOptimize() {
         isConfigured: isAiConfigured,
       });
 
-      // Call edge function WITH AI CONFIG
-      const { data, error: invokeError } = await invokeEdgeFunction<{
-        success: boolean;
-        jobId?: string;
-        message?: string;
-        error?: string;
-      }>('optimize-content', {
-        url: pageUrl,
-        siteUrl: pageUrl,
-        mode: 'optimize',
-        postTitle: targetKeyword || pageUrl,
-        keyword: targetKeyword || undefined,
-        outputMode: outputMode,
-        // ================================================================
-        // CRITICAL: Pass the AI configuration!
-        // ================================================================
-        aiConfig: aiConfigPayload,
-      });
+      // Build AI config payload
+const aiConfigPayload = (ai.apiKey && ai.provider && ai.model) ? {
+  provider: ai.provider,
+  apiKey: ai.apiKey,
+  model: ai.model,
+} : undefined;
+
+console.log('[QuickOptimize] AI Config:', {
+  provider: ai.provider,
+  hasApiKey: !!ai.apiKey,
+  model: ai.model,
+  isConfigured: !!aiConfigPayload,
+});
+
+const { data, error: invokeError } = await invokeEdgeFunction<{
+  success: boolean;
+  jobId?: string;
+  message?: string;
+  error?: string;
+}>('optimize-content', {
+  url: pageUrl,
+  siteUrl: pageUrl,
+  mode: 'optimize',
+  postTitle: targetKeyword || pageUrl,
+  keyword: targetKeyword || undefined,
+  outputMode: outputMode,
+  aiConfig: aiConfigPayload,
+});
+
 
       console.log('[QuickOptimize] Edge function response:', data, invokeError);
 
