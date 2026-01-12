@@ -51,54 +51,147 @@ interface OptimizationResult {
 // MAIN HANDLER
 // ============================================================================
 serve(async (req: Request) => {
+  console.log('[optimize-content] Request received');
+  
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
+    console.log('[optimize-content] CORS preflight');
     return new Response('ok', { headers: corsHeaders });
   }
 
   // Initialize Supabase client
-  const supabaseClient = createClient(
-    Deno.env.get('SUPABASE_URL') || '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
-  );
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  
+  console.log('[optimize-content] Supabase URL:', supabaseUrl ? 'SET' : 'MISSING');
+  console.log('[optimize-content] Supabase Key:', supabaseKey ? 'SET' : 'MISSING');
+
+  if (!supabaseUrl || !supabaseKey) {
+    console.error('[optimize-content] Missing Supabase credentials');
+    return new Response(
+      JSON.stringify({ 
+        success: false, 
+        error: 'Server configuration error: Missing database credentials',
+      }),
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 500,
+      }
+    );
+  }
+
+  const supabaseClient = createClient(supabaseUrl, supabaseKey);
 
   let jobId: string | null = null;
 
   try {
     // Parse request body
-    const body: OptimizeRequest = await req.json();
+    let body: OptimizeRequest;
+    try {
+      body = await req.json();
+    } catch (parseError) {
+      console.error('[optimize-content] Failed to parse request body:', parseError);
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: 'Invalid request body - expected JSON',
+        }),
+        { 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 400,
+        }
+      );
+    }
+
     const { url, pageId, postTitle, keyword, outputMode } = body;
 
-    console.log('[optimize-content] Starting optimization for:', url);
-    console.log('[optimize-content] Config:', { pageId, postTitle, keyword, outputMode });
+    console.log('[optimize-content] Request body:', JSON.stringify(body, null, 2));
 
     // Validate input
     if (!url) {
-      throw new Error('URL is required');
+      console.error('[optimize-content] URL is required');
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: 'URL is required',
+        }),
+        { 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 400,
+        }
+      );
     }
 
-    // Create job record
+    // Generate job ID
     jobId = crypto.randomUUID();
+    console.log('[optimize-content] Generated job ID:', jobId);
+
+    // ========================================================================
+    // IMPORTANT: Handle page_id foreign key constraint
+    // If pageId is provided, check if it's a valid UUID that exists in pages table
+    // If not, set page_id to null to avoid FK violation
+    // ========================================================================
+    let validPageId: string | null = null;
+    
+    if (pageId) {
+      // Check if it's a valid UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      
+      if (uuidRegex.test(pageId)) {
+        // Check if page exists in database
+        const { data: pageExists, error: pageCheckError } = await supabaseClient
+          .from('pages')
+          .select('id')
+          .eq('id', pageId)
+          .maybeSingle();
+        
+        if (pageCheckError) {
+          console.warn('[optimize-content] Error checking page existence:', pageCheckError);
+        } else if (pageExists) {
+          validPageId = pageId;
+          console.log('[optimize-content] Valid page_id found:', validPageId);
+        } else {
+          console.log('[optimize-content] page_id not found in database, will use null');
+        }
+      } else {
+        console.log('[optimize-content] pageId is not a valid UUID format, will use null');
+      }
+    }
+
+    // Create job record (with null page_id if page doesn't exist)
+    console.log('[optimize-content] Creating job record...');
     const { error: insertError } = await supabaseClient.from('jobs').insert({
       id: jobId,
-      page_id: pageId || null,
+      page_id: validPageId, // Will be null if page doesn't exist - avoids FK violation
       status: 'running',
       progress: 5,
       current_step: 'Initializing optimization...',
+      started_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
     });
 
     if (insertError) {
       console.error('[optimize-content] Failed to create job:', insertError);
-      throw new Error('Failed to create optimization job');
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: `Failed to create job: ${insertError.message}`,
+          details: insertError,
+        }),
+        { 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500,
+        }
+      );
     }
 
-    console.log('[optimize-content] Job created:', jobId);
+    console.log('[optimize-content] Job created successfully:', jobId);
 
     // Process in background (non-blocking)
-    processOptimization(supabaseClient, jobId, {
+    // Using EdgeRuntime.waitUntil if available, otherwise fire-and-forget
+    const processingPromise = processOptimization(supabaseClient, jobId, {
       url,
-      pageId,
+      pageId: validPageId,
       postTitle: postTitle || url,
       keyword,
       outputMode,
@@ -107,7 +200,18 @@ serve(async (req: Request) => {
       await updateJobFailed(supabaseClient, jobId!, err.message || 'Processing failed');
     });
 
+    // Try to use EdgeRuntime.waitUntil for proper background processing
+    // @ts-ignore - EdgeRuntime may not be typed
+    if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(processingPromise);
+      console.log('[optimize-content] Using EdgeRuntime.waitUntil for background processing');
+    } else {
+      console.log('[optimize-content] EdgeRuntime.waitUntil not available, using fire-and-forget');
+    }
+
     // Return immediately with job ID
+    console.log('[optimize-content] Returning success response with jobId:', jobId);
     return new Response(
       JSON.stringify({ 
         success: true, 
@@ -121,11 +225,15 @@ serve(async (req: Request) => {
     );
 
   } catch (err) {
-    console.error('[optimize-content] Error:', err);
+    console.error('[optimize-content] Unhandled error:', err);
     
     // Update job status if it was created
     if (jobId) {
-      await updateJobFailed(supabaseClient, jobId, err instanceof Error ? err.message : 'Unknown error');
+      try {
+        await updateJobFailed(supabaseClient, jobId, err instanceof Error ? err.message : 'Unknown error');
+      } catch (updateErr) {
+        console.error('[optimize-content] Failed to update job status:', updateErr);
+      }
     }
 
     return new Response(
@@ -150,13 +258,15 @@ async function processOptimization(
   jobId: string,
   config: {
     url: string;
-    pageId?: string;
+    pageId?: string | null;
     postTitle: string;
     keyword?: string;
     outputMode?: string;
   }
 ): Promise<void> {
   const { url, postTitle, keyword } = config;
+  
+  console.log('[processOptimization] Starting for job:', jobId);
   
   try {
     // Step 1: Analyzing (20%)
@@ -182,6 +292,7 @@ async function processOptimization(
     await delay(300);
 
     // Complete the job
+    console.log('[processOptimization] Completing job:', jobId);
     const { error: updateError } = await supabase.from('jobs').update({
       status: 'completed',
       progress: 100,
@@ -191,14 +302,14 @@ async function processOptimization(
     }).eq('id', jobId);
 
     if (updateError) {
-      console.error('[optimize-content] Failed to update job completion:', updateError);
+      console.error('[processOptimization] Failed to update job completion:', updateError);
       throw updateError;
     }
 
-    console.log('[optimize-content] Job completed successfully:', jobId);
+    console.log('[processOptimization] Job completed successfully:', jobId);
 
   } catch (err) {
-    console.error('[optimize-content] Processing error:', err);
+    console.error('[processOptimization] Processing error:', err);
     await updateJobFailed(supabase, jobId, err instanceof Error ? err.message : 'Processing failed');
     throw err;
   }
@@ -212,6 +323,8 @@ async function generateOptimizedContent(
   keyword: string,
   url: string
 ): Promise<OptimizationResult> {
+  console.log('[generateOptimizedContent] Generating for:', title);
+  
   // In production, this would call OpenAI/Anthropic API
   // For now, generate a structured demo response
   
@@ -221,7 +334,7 @@ async function generateOptimizedContent(
   const sections: BlogSection[] = [
     {
       type: 'tldr',
-      content: `This comprehensive guide covers everything you need to know about ${keyword}. We\'ll explore best practices, expert insights, and actionable strategies to help you achieve your goals.`,
+      content: `This comprehensive guide covers everything you need to know about ${keyword}. We'll explore best practices, expert insights, and actionable strategies to help you achieve your goals.`,
     },
     {
       type: 'heading',
@@ -229,11 +342,11 @@ async function generateOptimizedContent(
     },
     {
       type: 'paragraph',
-      content: `In today\'s competitive digital landscape, understanding ${keyword} is essential for success. This guide provides a deep dive into the topic, covering foundational concepts and advanced strategies that industry leaders use to stay ahead.`,
+      content: `In today's competitive digital landscape, understanding ${keyword} is essential for success. This guide provides a deep dive into the topic, covering foundational concepts and advanced strategies that industry leaders use to stay ahead.`,
     },
     {
       type: 'paragraph',
-      content: `Whether you\'re just getting started or looking to refine your existing approach, this comprehensive resource will equip you with the knowledge and tools needed to excel. We\'ve compiled insights from industry experts and real-world case studies to ensure you get actionable, proven advice.`,
+      content: `Whether you're just getting started or looking to refine your existing approach, this comprehensive resource will equip you with the knowledge and tools needed to excel. We've compiled insights from industry experts and real-world case studies to ensure you get actionable, proven advice.`,
     },
     {
       type: 'takeaways',
@@ -267,11 +380,11 @@ async function generateOptimizedContent(
     },
     {
       type: 'paragraph',
-      content: `When implementing ${keyword} best practices, focus on quality over quantity. Ensure every action you take aligns with your overall goals and provides genuine value to your audience. Consistency and authenticity are key differentiators in today\'s market.`,
+      content: `When implementing ${keyword} best practices, focus on quality over quantity. Ensure every action you take aligns with your overall goals and provides genuine value to your audience. Consistency and authenticity are key differentiators in today's market.`,
     },
     {
       type: 'paragraph',
-      content: 'Remember to track your progress using relevant metrics and KPIs. Regular analysis helps identify what\'s working and what needs adjustment. Use data to guide your decisions rather than relying on assumptions.',
+      content: `Remember to track your progress using relevant metrics and KPIs. Regular analysis helps identify what's working and what needs adjustment. Use data to guide your decisions rather than relying on assumptions.`,
     },
     {
       type: 'cta',
@@ -284,7 +397,7 @@ async function generateOptimizedContent(
     },
     {
       type: 'summary',
-      content: `This guide has covered the essential aspects of ${keyword}, from foundational concepts to advanced implementation strategies. By following these best practices and continuously optimizing your approach, you\'ll be well-positioned for success in your endeavors.`,
+      content: `This guide has covered the essential aspects of ${keyword}, from foundational concepts to advanced implementation strategies. By following these best practices and continuously optimizing your approach, you'll be well-positioned for success in your endeavors.`,
     },
   ];
 
@@ -313,7 +426,7 @@ async function generateOptimizedContent(
     }
   }).join('\n');
 
-  return {
+  const result: OptimizationResult = {
     title: formattedTitle,
     optimizedContent: optimizedHtml,
     content: optimizedHtml,
@@ -325,6 +438,9 @@ async function generateOptimizedContent(
     author: 'AI Content Expert',
     publishedAt: new Date().toISOString(),
   };
+
+  console.log('[generateOptimizedContent] Generated result with', result.wordCount, 'words');
+  return result;
 }
 
 // ============================================================================
@@ -336,13 +452,15 @@ async function updateJobProgress(
   progress: number,
   currentStep: string
 ): Promise<void> {
+  console.log(`[updateJobProgress] ${jobId}: ${progress}% - ${currentStep}`);
+  
   const { error } = await supabase.from('jobs').update({
     progress,
     current_step: currentStep,
   }).eq('id', jobId);
 
   if (error) {
-    console.error('[optimize-content] Failed to update progress:', error);
+    console.error('[updateJobProgress] Failed to update progress:', error);
   }
 }
 
@@ -351,6 +469,8 @@ async function updateJobFailed(
   jobId: string,
   errorMessage: string
 ): Promise<void> {
+  console.log(`[updateJobFailed] ${jobId}: ${errorMessage}`);
+  
   const { error } = await supabase.from('jobs').update({
     status: 'failed',
     error_message: errorMessage,
@@ -358,7 +478,7 @@ async function updateJobFailed(
   }).eq('id', jobId);
 
   if (error) {
-    console.error('[optimize-content] Failed to update job failure:', error);
+    console.error('[updateJobFailed] Failed to update job failure:', error);
   }
 }
 
