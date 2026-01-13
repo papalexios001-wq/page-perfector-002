@@ -1,14 +1,16 @@
 // ============================================================================
-// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v10.0.0
-// FIXED: Removed hardcoded fallback content - AI configuration REQUIRED
+// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v11.0.0
+// FIXED: Added 120s timeout to prevent hanging jobs
 // ============================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
 
 // ============================================================================
-// CORS CONFIGURATION
+// CONFIGURATION
 // ============================================================================
+
+const AI_TIMEOUT_MS = 120000 // 120 seconds timeout for AI calls
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -77,11 +79,43 @@ function errorResponse(
 }
 
 // ============================================================================
+// HELPER: Fetch with Timeout - CRITICAL FOR PREVENTING HANGING JOBS
+// ============================================================================
+
+async function fetchWithTimeout(
+  url: string, 
+  options: RequestInit, 
+  timeoutMs: number = AI_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => {
+    console.log(`[Timeout] Aborting request after ${timeoutMs}ms`)
+    controller.abort()
+  }, timeoutMs)
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+    clearTimeout(timeoutId)
+    return response
+  } catch (error) {
+    clearTimeout(timeoutId)
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`AI_TIMEOUT: Request timed out after ${timeoutMs / 1000} seconds. The AI provider is taking too long to respond. Please try again.`)
+    }
+    throw error
+  }
+}
+
+// ============================================================================
 // AI GENERATION: GOOGLE GEMINI
 // ============================================================================
 
 async function generateWithGemini(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
   console.log(`[Gemini] Generating content for: "${topic}" with model: ${model}`)
+  console.log(`[Gemini] Timeout: ${AI_TIMEOUT_MS}ms`)
   
   const prompt = `You are an expert SEO content writer. Generate a comprehensive, engaging blog post.
 
@@ -106,7 +140,9 @@ OUTPUT FORMAT (respond ONLY with valid JSON, no markdown code blocks):
   "excerpt": "A compelling 2-3 sentence excerpt"
 }`
 
-  const response = await fetch(
+  const startTime = Date.now()
+  
+  const response = await fetchWithTimeout(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
@@ -121,6 +157,8 @@ OUTPUT FORMAT (respond ONLY with valid JSON, no markdown code blocks):
       }),
     }
   )
+
+  console.log(`[Gemini] Response received in ${Date.now() - startTime}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -161,7 +199,7 @@ OUTPUT FORMAT (respond ONLY with valid JSON, no markdown code blocks):
   }
   
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
-  console.log(`[Gemini] Generated ${wordCount} words`)
+  console.log(`[Gemini] Generated ${wordCount} words in ${Date.now() - startTime}ms`)
 
   return {
     title: parsed.title || topic,
@@ -193,8 +231,11 @@ OUTPUT FORMAT (respond ONLY with valid JSON, no markdown code blocks):
 
 async function generateWithOpenAI(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
   console.log(`[OpenAI] Generating content for: "${topic}" with model: ${model}`)
+  console.log(`[OpenAI] Timeout: ${AI_TIMEOUT_MS}ms`)
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const startTime = Date.now()
+
+  const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -228,6 +269,8 @@ Respond with this exact JSON structure:
       max_tokens: 4096,
     }),
   })
+
+  console.log(`[OpenAI] Response received in ${Date.now() - startTime}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -266,7 +309,7 @@ Respond with this exact JSON structure:
   }
   
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
-  console.log(`[OpenAI] Generated ${wordCount} words`)
+  console.log(`[OpenAI] Generated ${wordCount} words in ${Date.now() - startTime}ms`)
 
   return {
     title: parsed.title || topic,
@@ -298,8 +341,11 @@ Respond with this exact JSON structure:
 
 async function generateWithAnthropic(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
   console.log(`[Anthropic] Generating content for: "${topic}" with model: ${model}`)
+  console.log(`[Anthropic] Timeout: ${AI_TIMEOUT_MS}ms`)
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const startTime = Date.now()
+
+  const response = await fetchWithTimeout('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -318,6 +364,8 @@ Respond with JSON only:
       }],
     }),
   })
+
+  console.log(`[Anthropic] Response received in ${Date.now() - startTime}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -352,6 +400,7 @@ Respond with JSON only:
   }
   
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  console.log(`[Anthropic] Generated ${wordCount} words in ${Date.now() - startTime}ms`)
 
   return {
     title: parsed.title || topic,
@@ -383,8 +432,11 @@ Respond with JSON only:
 
 async function generateWithGroq(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
   console.log(`[Groq] Generating content for: "${topic}" with model: ${model}`)
+  console.log(`[Groq] Timeout: ${AI_TIMEOUT_MS}ms`)
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const startTime = Date.now()
+
+  const response = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -400,6 +452,8 @@ async function generateWithGroq(apiKey: string, model: string, topic: string): P
       max_tokens: 4096,
     }),
   })
+
+  console.log(`[Groq] Response received in ${Date.now() - startTime}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -434,6 +488,7 @@ async function generateWithGroq(apiKey: string, model: string, topic: string): P
   }
   
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  console.log(`[Groq] Generated ${wordCount} words in ${Date.now() - startTime}ms`)
 
   return {
     title: parsed.title || topic,
@@ -465,8 +520,11 @@ async function generateWithGroq(apiKey: string, model: string, topic: string): P
 
 async function generateWithOpenRouter(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
   console.log(`[OpenRouter] Generating content for: "${topic}" with model: ${model}`)
+  console.log(`[OpenRouter] Timeout: ${AI_TIMEOUT_MS}ms`)
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const startTime = Date.now()
+
+  const response = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -502,6 +560,8 @@ Respond with this exact JSON structure:
       max_tokens: 4096,
     }),
   })
+
+  console.log(`[OpenRouter] Response received in ${Date.now() - startTime}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -539,7 +599,7 @@ Respond with this exact JSON structure:
   }
   
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
-  console.log(`[OpenRouter] Generated ${wordCount} words`)
+  console.log(`[OpenRouter] Generated ${wordCount} words in ${Date.now() - startTime}ms`)
 
   return {
     title: parsed.title || topic,
@@ -566,7 +626,7 @@ Respond with this exact JSON structure:
 }
 
 // ============================================================================
-// MAIN AI ROUTER - NO FALLBACK, ERRORS ARE PROPAGATED
+// MAIN AI ROUTER - WITH TIMEOUT PROTECTION
 // ============================================================================
 
 async function generateWithAI(aiConfig: AIConfig, topic: string): Promise<GeneratedContent> {
@@ -574,10 +634,10 @@ async function generateWithAI(aiConfig: AIConfig, topic: string): Promise<Genera
   console.log('[generateWithAI] Provider:', aiConfig.provider)
   console.log('[generateWithAI] Model:', aiConfig.model)
   console.log('[generateWithAI] Topic:', topic)
+  console.log('[generateWithAI] Timeout:', AI_TIMEOUT_MS, 'ms')
 
   const { provider, apiKey, model } = aiConfig
 
-  // Route to appropriate provider - NO TRY/CATCH, let errors propagate
   switch (provider.toLowerCase()) {
     case 'google':
       return await generateWithGemini(apiKey, model || 'gemini-2.0-flash', topic)
@@ -618,7 +678,7 @@ async function updateProgress(supabase: any, jobId: string, progress: number, st
 }
 
 // ============================================================================
-// BACKGROUND JOB PROCESSING - WITH PROPER ERROR HANDLING
+// BACKGROUND JOB PROCESSING - WITH TIMEOUT AND ERROR HANDLING
 // ============================================================================
 
 async function processJob(
@@ -631,6 +691,7 @@ async function processJob(
   console.log(`[Job ${jobId}] Topic: ${topic}`)
   console.log(`[Job ${jobId}] AI Provider: ${aiConfig.provider}`)
   console.log(`[Job ${jobId}] AI Model: ${aiConfig.model}`)
+  console.log(`[Job ${jobId}] Timeout: ${AI_TIMEOUT_MS}ms`)
   
   try {
     // Stage 1: 15%
@@ -641,9 +702,14 @@ async function processJob(
     await updateProgress(supabase, jobId, 30, 'Researching topic and keywords...')
     await new Promise(r => setTimeout(r, 300))
 
-    // Stage 3: 50% - CRITICAL: AI Generation (NO FALLBACK)
-    await updateProgress(supabase, jobId, 50, `Generating content with ${aiConfig.provider}...`)
+    // Stage 3: 50% - CRITICAL: AI Generation with TIMEOUT
+    await updateProgress(supabase, jobId, 50, `Generating content with ${aiConfig.provider}... (timeout: ${AI_TIMEOUT_MS/1000}s)`)
+    
+    const startTime = Date.now()
     const result = await generateWithAI(aiConfig, topic)
+    const duration = Date.now() - startTime
+    
+    console.log(`[Job ${jobId}] AI generation completed in ${duration}ms`)
 
     // Stage 4: 70%
     await updateProgress(supabase, jobId, 70, 'Applying SEO optimizations...')
@@ -673,9 +739,11 @@ async function processJob(
     const errorMessage = err instanceof Error ? err.message : 'Unknown error during AI generation'
     console.error(`[Job ${jobId}] ❌ FAILED:`, errorMessage)
     
+    // Mark job as failed with detailed error
     await supabase.from('jobs').update({
       status: 'failed',
       error_message: errorMessage,
+      current_step: 'Failed - ' + (errorMessage.split(':')[0] || 'Error'),
       completed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', jobId)
@@ -694,6 +762,7 @@ serve(async (req: Request): Promise<Response> => {
 
   console.log('[optimize-content] ========== NEW REQUEST ==========')
   console.log('[optimize-content] Timestamp:', new Date().toISOString())
+  console.log('[optimize-content] Version: v11.0.0 (with timeout)')
 
   try {
     const body = await req.json()
@@ -707,7 +776,7 @@ serve(async (req: Request): Promise<Response> => {
     }))
 
     // ========================================================================
-    // VALIDATION: AI Configuration is REQUIRED - NO FALLBACK
+    // VALIDATION: AI Configuration is REQUIRED
     // ========================================================================
     
     const aiConfig = body.aiConfig as AIConfig | undefined
@@ -828,8 +897,7 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log('[optimize-content] Job created, starting background processing...')
 
-    // Start background processing (non-blocking)
-    // AI config is now validated and REQUIRED - no fallback
+    // Start background processing (non-blocking) with timeout protection
     processJob(supabase, jobId, topic, aiConfig).catch(err => {
       console.error('[optimize-content] Background processing error:', err)
     })
@@ -843,6 +911,7 @@ serve(async (req: Request): Promise<Response> => {
       message: 'AI optimization started. Poll job status for updates.',
       aiProvider: aiConfig.provider,
       aiModel: aiConfig.model,
+      timeout: AI_TIMEOUT_MS,
     })
 
   } catch (err) {
