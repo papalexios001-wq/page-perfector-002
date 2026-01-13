@@ -1,5 +1,5 @@
 // ============================================================================
-// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v15.0.0
+// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v16.0.0
 // FIXED: Synchronous processing - await processJob before returning HTTP response// ============================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -130,7 +130,7 @@ function buildPrompt(topic: string, settings: ContentSettings): string {
   
   // Calculate number of sections needed for target word count
   const targetWords = Math.round((minWordCount + maxWordCount) / 2)
-  const numSections = Math.max(5, Math.ceil(targetWords / 400)) // ~400 words per section
+  const numSections = Math.max(5, Math.ceil(targetWords / 300)) // ~400 words per section
   
   let additionalSections = ''
   if (enableFaqs !== false) {
@@ -151,7 +151,7 @@ TOPIC: ${topic}
 You MUST write between ${minWordCount} and ${maxWordCount} words.
 Target: ${targetWords} words.
 This is a HARD requirement - do NOT write less than ${minWordCount} words.
-Write ${numSections} substantial sections with 300-500 words each.
+Write ${numSections} substantial sections with 350-500 words each.
 
 === CONTENT REQUIREMENTS ===
 - Write EXACTLY ${minWordCount}-${maxWordCount} words of high-quality content
@@ -914,7 +914,7 @@ serve(async (req: Request): Promise<Response> => {
   }
 
   console.log('[optimize-content] ========== NEW REQUEST ==========')
-  console.log('[optimize-content] Version: v15.0.0 (max_tokens: 32768, timeout: 300s)')
+  console.log('[optimize-content] Version: v16.0.0 (max_tokens: 32768, timeout: 300s)')
 
   try {
     const body = await req.json()
