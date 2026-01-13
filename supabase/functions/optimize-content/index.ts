@@ -125,43 +125,67 @@ async function fetchWithTimeout(
 // HELPER: Build AI Prompt with Word Count Requirements
 // ============================================================================
 
+// ==============================================================================
+// HELPER: Build Enterprise-Grade AI Prompt with Word Count Requirements
+// ==============================================================================
 function buildPrompt(topic: string, settings: ContentSettings): string {
   const { minWordCount, maxWordCount, enableFaqs, enableToc, enableKeyTakeaways } = settings
   
-  // Calculate number of sections needed for target word count
+  // Calculate target words and sections for optimal content structure
   const targetWords = Math.round((minWordCount + maxWordCount) / 2)
-  const numSections = Math.max(5, Math.ceil(targetWords / 300)) // ~400 words per section
+  const wordsPerSection = 400 // Optimal section length for readability
+  const numSections = Math.max(5, Math.ceil(targetWords / wordsPerSection))
   
+  // Build dynamic additional sections
   let additionalSections = ''
   if (enableFaqs !== false) {
-    additionalSections += '\n  "faqs": [{"question": "FAQ 1?", "answer": "Detailed answer..."}, {"question": "FAQ 2?", "answer": "Detailed answer..."}],'
+    additionalSections += `\n  "faqs": [{"question": "Relevant FAQ 1?", "answer": "Comprehensive answer..."}, {"question": "Relevant FAQ 2?", "answer": "Detailed answer..."}],`
   }
   if (enableKeyTakeaways !== false) {
-    additionalSections += '\n  "keyTakeaways": ["Key point 1", "Key point 2", "Key point 3", "Key point 4", "Key point 5"],'
+    additionalSections += `\n  "keyTakeaways": ["Key insight 1", "Key insight 2", "Key insight 3", "Key insight 4", "Key insight 5"],`
   }
   if (enableToc !== false) {
-    additionalSections += '\n  "tableOfContents": ["Introduction", "Section 1", "Section 2", ...],'
+    additionalSections += `\n  "tableOfContents": ["Introduction", "Section 1", "Section 2", "Section 3", "Conclusion"],`
   }
 
-  return `You are an expert SEO content writer. Generate a comprehensive, engaging, and in-depth blog post.
+  return `You are an elite SEO content strategist and professional writer with expertise in creating comprehensive, authoritative, and highly engaging long-form content. Your content consistently ranks #1 on Google and provides exceptional value to readers.
 
 TOPIC: ${topic}
 
-=== CRITICAL WORD COUNT REQUIREMENT ===
+=== ABSOLUTE WORD COUNT REQUIREMENT (NON-NEGOTIABLE) ===
 You MUST write between ${minWordCount} and ${maxWordCount} words.
 Target: ${targetWords} words.
-This is a HARD requirement - do NOT write less than ${minWordCount} words.
-Write ${numSections} substantial sections with 350-500 words each.
+This is a STRICT requirement - content below ${minWordCount} words will be REJECTED.
+Write ${numSections} comprehensive sections with 350-500 words each.
+Count your words carefully before submitting.
 
-=== CONTENT REQUIREMENTS ===
-- Write EXACTLY ${minWordCount}-${maxWordCount} words of high-quality content
-- Use conversational but authoritative tone
-- Include specific examples, case studies, and actionable advice
-- Structure with ${numSections} clear H2 sections, each with 2-3 paragraphs
-- Each paragraph should be 4-6 sentences
-- Include bullet points, numbered lists where appropriate
-- Add real statistics and data points where relevant
-- Make every section comprehensive and valuable
+=== CONTENT EXCELLENCE STANDARDS ===
+1. DEPTH & COMPREHENSIVENESS:
+   - Cover every aspect of the topic thoroughly
+   - Include expert-level insights and analysis
+   - Provide actionable, specific advice
+   - Address common questions and concerns
+   - Include real-world examples and case studies
+
+2. STRUCTURE & READABILITY:
+   - Write ${numSections} detailed H2 sections minimum
+   - Each section: 2-3 substantial paragraphs (350-500 words)
+   - Use H3 subheadings within sections for organization
+   - Include bullet points and numbered lists strategically
+   - Each paragraph: 4-6 well-developed sentences
+
+3. ENGAGEMENT & VALUE:
+   - Hook readers with compelling introductions
+   - Use conversational yet authoritative tone
+   - Include statistics, data, and research findings
+   - Add practical tips and implementation steps
+   - Create scannable content with clear formatting
+
+4. SEO OPTIMIZATION:
+   - Naturally integrate primary and secondary keywords
+   - Use semantic variations and related terms
+   - Optimize for featured snippets where applicable
+   - Include internal linking opportunities
 
 === OUTPUT FORMAT ===
 Respond ONLY with valid JSON (no markdown code blocks):
@@ -170,13 +194,20 @@ Respond ONLY with valid JSON (no markdown code blocks):
   "metaDescription": "Engaging meta description with keyword (150-160 chars)",
   "h1": "Main H1 heading - slightly different from title",
   "h2s": ["H2 Section 1", "H2 Section 2", "H2 Section 3", ... (${numSections} sections)],
-  "content": "<h2>Section 1 Title</h2><p>Comprehensive paragraph 1 with 4-6 sentences...</p><p>Another detailed paragraph...</p><h2>Section 2 Title</h2><p>More in-depth content...</p>... CONTINUE UNTIL YOU REACH ${minWordCount}-${maxWordCount} WORDS",
+  "content": "<h2>Section 1 Title</h2><p>Comprehensive paragraph 1 with 4-6 sentences...</p><p>Another detailed paragraph...</p><h2>Section 2 Title</h2>...",
   "tldrSummary": "A 2-3 sentence TL;DR summary",${additionalSections}
   "excerpt": "A compelling 2-3 sentence excerpt for previews"
 }
 
-REMEMBER: The "content" field MUST contain ${minWordCount}-${maxWordCount} words of HTML content. Count your words!`
+=== CRITICAL REMINDERS ===
+- The "content" field MUST contain ${minWordCount}-${maxWordCount} words of HTML content
+- Write REAL, VALUABLE content - not filler or fluff
+- Every section should provide unique insights
+- Quality AND quantity are both required
+- COUNT YOUR WORDS - this is essential
+`
 }
+
 
 // ============================================================================
 // AI GENERATION: GOOGLE GEMINI
