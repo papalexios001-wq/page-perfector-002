@@ -1,11 +1,11 @@
 // ============================================================================
-// QUICK OPTIMIZE - FIXED VERSION v5.0
-// CRITICAL: Passes AI config AND polls correctly
+// QUICK OPTIMIZE - SOTA VERSION v6.0
+// CRITICAL: Passes word count settings from Configuration
 // ============================================================================
 
 import { useState, useCallback, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { motion } from 'framer-motion';
-import { Zap, Loader2, Target, FileText, Send, CheckCircle2, AlertCircle, RefreshCw, ExternalLink, Settings } from 'lucide-react';
+import { Zap, Loader2, Target, FileText, Send, CheckCircle2, AlertCircle, RefreshCw, ExternalLink, Settings, FileDigit } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -80,7 +80,7 @@ interface JobData {
 // ============================================================================
 export function QuickOptimize() {
   const { addActivityLog } = usePagesStore();
-  const { ai } = useConfigStore();
+  const { ai, advanced, wordpress } = useConfigStore();
   
   // Form State
   const [pageUrl, setPageUrl] = useState('');
@@ -97,6 +97,10 @@ export function QuickOptimize() {
   const [blogPost, setBlogPost] = useState<any>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   
+  // Publish State
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState<{ success: boolean; postUrl?: string; error?: string } | null>(null);
+  
   // Refs
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -105,6 +109,7 @@ export function QuickOptimize() {
 
   // Check if AI is configured
   const isAiConfigured = Boolean(ai.apiKey && ai.provider && ai.model);
+  const isWpConfigured = Boolean(wordpress.siteUrl && wordpress.username && wordpress.applicationPassword);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -121,8 +126,6 @@ export function QuickOptimize() {
     if (!mountedRef.current) return;
 
     try {
-      console.log(`[Poll] Checking job: ${currentJobId}`);
-      
       const { data: jobData, error: queryError } = await supabase
         .from('jobs')
         .select('*')
@@ -131,18 +134,9 @@ export function QuickOptimize() {
 
       if (!mountedRef.current) return;
 
-      if (queryError) {
-        console.error('[Poll] Query error:', queryError);
-        return;
-      }
-
-      if (!jobData) {
-        console.warn('[Poll] Job not found');
-        return;
-      }
+      if (queryError || !jobData) return;
 
       const job = jobData as JobData;
-      console.log(`[Poll] Status: ${job.status}, Progress: ${job.progress}%`);
       
       if (mountedRef.current) {
         setProgress(job.progress || 0);
@@ -151,8 +145,6 @@ export function QuickOptimize() {
 
       // Handle completion
       if (job.status === 'completed' && job.result) {
-        console.log('[Poll] Job completed!');
-        
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
           pollingRef.current = null;
@@ -167,16 +159,15 @@ export function QuickOptimize() {
           setIsComplete(true);
           setIsOptimizing(false);
           
+          const targetMet = job.result.wordCountMet ? '✓' : '⚠';
           toast.success('Optimization Complete!', {
-            description: `Quality: ${job.result.qualityScore || 'N/A'}/100 • Words: ${job.result.wordCount || 'N/A'}`,
+            description: `${targetMet} ${job.result.wordCount} words • Quality: ${job.result.qualityScore}/100`,
           });
         }
       }
 
       // Handle failure
       if (job.status === 'failed') {
-        console.error('[Poll] Job failed:', job.error_message);
-        
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
           pollingRef.current = null;
@@ -208,11 +199,11 @@ export function QuickOptimize() {
       return;
     }
 
-    // Warn if AI not configured
     if (!isAiConfigured) {
-      toast.warning('AI Provider not configured', {
-        description: 'Go to Configuration tab to set up AI. Using fallback content.',
+      toast.error('AI Provider not configured', {
+        description: 'Go to Configuration tab to set up your AI provider.',
       });
+      return;
     }
 
     // Reset state
@@ -224,6 +215,7 @@ export function QuickOptimize() {
     setBlogPost(null);
     setJobId(null);
     setElapsedTime(0);
+    setPublishResult(null);
     startTimeRef.current = Date.now();
 
     // Start timer
@@ -235,21 +227,27 @@ export function QuickOptimize() {
 
     try {
       console.log('[QuickOptimize] Starting optimization...');
-      console.log('[QuickOptimize] AI Config:', {
-        provider: ai.provider,
-        hasApiKey: !!ai.apiKey,
-        model: ai.model,
-        isConfigured: isAiConfigured,
-      });
+      console.log('[QuickOptimize] Word count settings:', advanced.minWordCount, '-', advanced.maxWordCount);
 
       // Build AI config payload
-      const aiConfigPayload = isAiConfigured ? {
+      const aiConfigPayload = {
         provider: ai.provider,
         apiKey: ai.apiKey,
         model: ai.model,
-      } : undefined;
+      };
 
-      // Call edge function WITH AI CONFIG
+      // Build content settings from advanced config
+      const contentSettings = {
+        minWordCount: advanced.minWordCount || 2000,
+        maxWordCount: advanced.maxWordCount || 3000,
+        enableFaqs: advanced.enableFaqs ?? true,
+        enableToc: advanced.enableToc ?? true,
+        enableKeyTakeaways: advanced.enableKeyTakeaways ?? true,
+      };
+
+      console.log('[QuickOptimize] Content settings:', contentSettings);
+
+      // Call edge function WITH AI CONFIG AND CONTENT SETTINGS
       const { data, error: invokeError } = await supabase.functions.invoke('optimize-content', {
         body: {
           url: pageUrl,
@@ -257,18 +255,17 @@ export function QuickOptimize() {
           postTitle: targetKeyword || pageUrl,
           keyword: targetKeyword || undefined,
           outputMode: outputMode,
-          aiConfig: aiConfigPayload, // CRITICAL: Pass AI config!
+          aiConfig: aiConfigPayload,
+          contentSettings: contentSettings, // CRITICAL: Pass word count settings!
         }
       });
-
-      console.log('[QuickOptimize] Edge function response:', data, invokeError);
 
       if (invokeError) {
         throw new Error(invokeError.message || 'Failed to start optimization');
       }
 
       if (!data?.success) {
-        throw new Error(data?.error || 'Optimization service returned an error');
+        throw new Error(data?.error || data?.message || 'Optimization service returned an error');
       }
 
       if (!data?.jobId) {
@@ -278,7 +275,7 @@ export function QuickOptimize() {
       const newJobId = data.jobId;
       console.log('[QuickOptimize] Job created:', newJobId);
       setJobId(newJobId);
-      setStatusMessage('Job started, waiting for updates...');
+      setStatusMessage(`Generating ${contentSettings.minWordCount}-${contentSettings.maxWordCount} word article...`);
       setProgress(5);
 
       // Start polling
@@ -315,6 +312,68 @@ export function QuickOptimize() {
     }
   };
 
+  // Handle publish to WordPress
+  const handlePublish = async () => {
+    if (!blogPost || !isWpConfigured) {
+      toast.error('WordPress not configured', {
+        description: 'Go to Configuration tab to set up WordPress.',
+      });
+      return;
+    }
+
+    setIsPublishing(true);
+    setPublishResult(null);
+
+    try {
+      console.log('[QuickOptimize] Publishing to WordPress...');
+
+      const { data, error: publishError } = await supabase.functions.invoke('publish-to-wordpress', {
+        body: {
+          title: blogPost.title || blogPost.optimizedTitle,
+          content: blogPost.content || blogPost.optimizedContent,
+          excerpt: blogPost.excerpt,
+          metaDescription: blogPost.metaDescription,
+          status: outputMode === 'publish' ? 'publish' : 'draft',
+          // WordPress credentials from config
+          wpUrl: wordpress.siteUrl,
+          wpUsername: wordpress.username,
+          wpPassword: wordpress.applicationPassword,
+        }
+      });
+
+      if (publishError) {
+        throw new Error(publishError.message || 'Failed to publish');
+      }
+
+      if (!data?.success) {
+        throw new Error(data?.message || data?.error || 'Publishing failed');
+      }
+
+      setPublishResult({
+        success: true,
+        postUrl: data.postUrl || data.editUrl,
+      });
+
+      toast.success('Published Successfully!', {
+        description: `Post ${outputMode === 'publish' ? 'published' : 'saved as draft'} to WordPress`,
+      });
+
+    } catch (err: any) {
+      console.error('[QuickOptimize] Publish error:', err);
+      
+      setPublishResult({
+        success: false,
+        error: err.message,
+      });
+
+      toast.error('Publish Failed', {
+        description: err.message,
+      });
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
   // Handle reset
   const handleReset = () => {
     setPageUrl('');
@@ -327,6 +386,7 @@ export function QuickOptimize() {
     setError(null);
     setBlogPost(null);
     setElapsedTime(0);
+    setPublishResult(null);
     
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
@@ -376,6 +436,19 @@ export function QuickOptimize() {
             )}
           </div>
         </div>
+
+        {/* Word Count Target Display */}
+        {isAiConfigured && (
+          <div className="p-2 rounded-lg border bg-blue-50 border-blue-200">
+            <div className="flex items-center gap-2">
+              <FileDigit className="w-4 h-4 text-blue-600" />
+              <p className="text-xs text-blue-800">
+                Target: <strong>{advanced.minWordCount || 2000}-{advanced.maxWordCount || 3000} words</strong>
+                <span className="text-blue-600 ml-1">(Configure in Advanced Settings)</span>
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Input Form */}
         {!isComplete && (
@@ -496,8 +569,11 @@ export function QuickOptimize() {
               <div className="flex-1">
                 <p className="text-sm font-medium text-green-900">Optimization Complete!</p>
                 <p className="text-xs text-green-700">
-                  Quality: {blogPost.qualityScore || 'N/A'}/100 • 
-                  Words: {blogPost.wordCount || 'N/A'}
+                  {blogPost.wordCountMet ? '✓' : '⚠'} {blogPost.wordCount} words
+                  {blogPost.targetWordCount && (
+                    <span className="text-green-600"> (target: {blogPost.targetWordCount.min}-{blogPost.targetWordCount.max})</span>
+                  )}
+                  {' '}• Quality: {blogPost.qualityScore || 'N/A'}/100
                 </p>
               </div>
             </div>
@@ -511,17 +587,54 @@ export function QuickOptimize() {
                 <p className="text-xs text-gray-600 line-clamp-2">{blogPost.metaDescription}</p>
               )}
               <div className="flex flex-wrap gap-1 mt-2">
+                <Badge variant="secondary" className="text-xs">Words: {blogPost.wordCount}</Badge>
                 {blogPost.qualityScore && (
                   <Badge variant="secondary" className="text-xs">Quality: {blogPost.qualityScore}</Badge>
                 )}
-                {blogPost.seoScore && (
-                  <Badge variant="secondary" className="text-xs">SEO: {blogPost.seoScore}</Badge>
-                )}
-                {blogPost.wordCount && (
-                  <Badge variant="secondary" className="text-xs">Words: {blogPost.wordCount}</Badge>
+                {blogPost.h2s?.length > 0 && (
+                  <Badge variant="secondary" className="text-xs">Sections: {blogPost.h2s.length}</Badge>
                 )}
               </div>
             </div>
+
+            {/* Publish Button */}
+            {isWpConfigured && !publishResult?.success && (
+              <Button
+                onClick={handlePublish}
+                disabled={isPublishing}
+                className="w-full mt-3 gap-2"
+                variant="default"
+              >
+                {isPublishing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                {isPublishing ? 'Publishing...' : `Publish to WordPress (${outputMode})`}
+              </Button>
+            )}
+
+            {/* Publish Result */}
+            {publishResult && (
+              <div className={`mt-3 p-2 rounded-lg border ${publishResult.success ? 'bg-green-100 border-green-300' : 'bg-red-100 border-red-300'}`}>
+                {publishResult.success ? (
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-green-600" />
+                    <span className="text-xs text-green-800">Published successfully!</span>
+                    {publishResult.postUrl && (
+                      <a href={publishResult.postUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-green-700 underline flex items-center gap-1">
+                        View <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600" />
+                    <span className="text-xs text-red-800">{publishResult.error}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -529,7 +642,7 @@ export function QuickOptimize() {
         {!isComplete ? (
           <Button
             onClick={handleOptimize}
-            disabled={isOptimizing || !pageUrl.trim()}
+            disabled={isOptimizing || !pageUrl.trim() || !isAiConfigured}
             className="w-full gap-2"
             variant="default"
           >
@@ -538,7 +651,10 @@ export function QuickOptimize() {
             ) : (
               <Zap className="w-4 h-4" />
             )}
-            {isOptimizing ? 'Optimizing...' : isAiConfigured ? `Optimize with ${ai.provider}` : 'Optimize (Fallback)'}
+            {isOptimizing 
+              ? 'Optimizing...' 
+              : `Generate ${advanced.minWordCount || 2000}-${advanced.maxWordCount || 3000} Word Article`
+            }
           </Button>
         ) : (
           <Button
