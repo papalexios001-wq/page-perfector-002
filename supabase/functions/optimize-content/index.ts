@@ -1,6 +1,6 @@
 // ============================================================================
-// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v12.0.0
-// FIXED: Respects word count settings from Configuration
+// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v13.0.0
+// FIXED: max_tokens set to 16384 to prevent length cutoff
 // ============================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -10,7 +10,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
 // CONFIGURATION
 // ============================================================================
 
-const AI_TIMEOUT_MS = 180000 // 180 seconds for longer content
+const AI_TIMEOUT_MS = 300000 // 300 seconds (5 minutes) for longer content
+const MAX_OUTPUT_TOKENS = 16384 // Maximum tokens for content generation
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -103,6 +104,8 @@ async function fetchWithTimeout(
     controller.abort()
   }, timeoutMs)
 
+  console.log(`[fetchWithTimeout] Timeout: ${timeoutMs}ms`)
+
   try {
     const response = await fetch(url, {
       ...options,
@@ -177,16 +180,6 @@ REMEMBER: The "content" field MUST contain ${minWordCount}-${maxWordCount} words
 }
 
 // ============================================================================
-// HELPER: Calculate max tokens based on word count
-// ============================================================================
-
-function calculateMaxTokens(maxWordCount: number): number {
-  // Roughly 1.3 tokens per word for English, plus overhead for JSON structure
-  const estimatedTokens = Math.ceil(maxWordCount * 1.5) + 1000
-  return Math.min(16384, Math.max(4096, estimatedTokens))
-}
-
-// ============================================================================
 // AI GENERATION: GOOGLE GEMINI
 // ============================================================================
 
@@ -198,11 +191,9 @@ async function generateWithGemini(
 ): Promise<GeneratedContent> {
   console.log(`[Gemini] Generating content for: "${topic}" with model: ${model}`)
   console.log(`[Gemini] Word count target: ${settings.minWordCount}-${settings.maxWordCount}`)
+  console.log(`[Gemini] Max output tokens: ${MAX_OUTPUT_TOKENS}`)
   
   const prompt = buildPrompt(topic, settings)
-  const maxTokens = calculateMaxTokens(settings.maxWordCount)
-  
-  console.log(`[Gemini] Max tokens: ${maxTokens}`)
 
   const startTime = Date.now()
   
@@ -215,14 +206,15 @@ async function generateWithGemini(
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: maxTokens,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
           topP: 0.9,
         },
       }),
     }
   )
 
-  console.log(`[Gemini] Response received in ${Date.now() - startTime}ms`)
+  const duration = Date.now() - startTime
+  console.log(`[Gemini] Response received in ${duration}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -242,6 +234,15 @@ async function generateWithGemini(
   }
 
   const data = await response.json()
+  
+  // Log finish reason
+  const finishReason = data.candidates?.[0]?.finishReason
+  console.log(`[Gemini] Finish reason: ${finishReason}`)
+  
+  if (finishReason === 'MAX_TOKENS') {
+    console.warn(`[Gemini] ⚠️ Output was truncated due to token limit!`)
+  }
+  
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
   
   if (!text) {
@@ -265,7 +266,8 @@ async function generateWithGemini(
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
   const wordCountMet = wordCount >= settings.minWordCount && wordCount <= settings.maxWordCount
   
-  console.log(`[Gemini] Generated ${wordCount} words (target: ${settings.minWordCount}-${settings.maxWordCount}) - ${wordCountMet ? 'MET' : 'NOT MET'}`)
+  console.log(`[Gemini] Generated ${wordCount} words in ${duration}ms`)
+  console.log(`[Gemini] Word count target: ${settings.minWordCount}-${settings.maxWordCount} - ${wordCountMet ? 'MET ✅' : 'NOT MET ❌'}`)
 
   return {
     title: parsed.title || topic,
@@ -307,9 +309,9 @@ async function generateWithOpenAI(
 ): Promise<GeneratedContent> {
   console.log(`[OpenAI] Generating content for: "${topic}" with model: ${model}`)
   console.log(`[OpenAI] Word count target: ${settings.minWordCount}-${settings.maxWordCount}`)
+  console.log(`[OpenAI] Max output tokens: ${MAX_OUTPUT_TOKENS}`)
 
   const prompt = buildPrompt(topic, settings)
-  const maxTokens = calculateMaxTokens(settings.maxWordCount)
 
   const startTime = Date.now()
 
@@ -329,11 +331,12 @@ async function generateWithOpenAI(
         { role: 'user', content: prompt },
       ],
       temperature: 0.7,
-      max_tokens: maxTokens,
+      max_tokens: MAX_OUTPUT_TOKENS,
     }),
   })
 
-  console.log(`[OpenAI] Response received in ${Date.now() - startTime}ms`)
+  const duration = Date.now() - startTime
+  console.log(`[OpenAI] Response received in ${duration}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -350,6 +353,17 @@ async function generateWithOpenAI(
   }
 
   const data = await response.json()
+  
+  // Log finish reason and token usage
+  const finishReason = data.choices?.[0]?.finish_reason
+  const usage = data.usage
+  console.log(`[OpenAI] Finish reason: ${finishReason}`)
+  console.log(`[OpenAI] Token usage: ${JSON.stringify(usage)}`)
+  
+  if (finishReason === 'length') {
+    console.warn(`[OpenAI] ⚠️ Output was truncated due to token limit!`)
+  }
+  
   const text = data.choices?.[0]?.message?.content || ''
   
   if (!text) {
@@ -370,7 +384,8 @@ async function generateWithOpenAI(
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
   const wordCountMet = wordCount >= settings.minWordCount && wordCount <= settings.maxWordCount
 
-  console.log(`[OpenAI] Generated ${wordCount} words - ${wordCountMet ? 'MET' : 'NOT MET'}`)
+  console.log(`[OpenAI] Generated ${wordCount} words in ${duration}ms`)
+  console.log(`[OpenAI] Word count target: ${settings.minWordCount}-${settings.maxWordCount} - ${wordCountMet ? 'MET ✅' : 'NOT MET ❌'}`)
 
   return {
     title: parsed.title || topic,
@@ -410,9 +425,9 @@ async function generateWithAnthropic(
 ): Promise<GeneratedContent> {
   console.log(`[Anthropic] Generating content for: "${topic}" with model: ${model}`)
   console.log(`[Anthropic] Word count target: ${settings.minWordCount}-${settings.maxWordCount}`)
+  console.log(`[Anthropic] Max output tokens: ${MAX_OUTPUT_TOKENS}`)
 
   const prompt = buildPrompt(topic, settings)
-  const maxTokens = calculateMaxTokens(settings.maxWordCount)
 
   const startTime = Date.now()
 
@@ -425,12 +440,13 @@ async function generateWithAnthropic(
     },
     body: JSON.stringify({
       model: model || 'claude-3-haiku-20240307',
-      max_tokens: maxTokens,
+      max_tokens: MAX_OUTPUT_TOKENS,
       messages: [{ role: 'user', content: prompt }],
     }),
   })
 
-  console.log(`[Anthropic] Response received in ${Date.now() - startTime}ms`)
+  const duration = Date.now() - startTime
+  console.log(`[Anthropic] Response received in ${duration}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -441,6 +457,17 @@ async function generateWithAnthropic(
   }
 
   const data = await response.json()
+  
+  // Log stop reason and usage
+  const stopReason = data.stop_reason
+  const usage = data.usage
+  console.log(`[Anthropic] Stop reason: ${stopReason}`)
+  console.log(`[Anthropic] Token usage: ${JSON.stringify(usage)}`)
+  
+  if (stopReason === 'max_tokens') {
+    console.warn(`[Anthropic] ⚠️ Output was truncated due to token limit!`)
+  }
+  
   const text = data.content?.[0]?.text || ''
   
   if (!text) {
@@ -461,7 +488,8 @@ async function generateWithAnthropic(
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
   const wordCountMet = wordCount >= settings.minWordCount && wordCount <= settings.maxWordCount
 
-  console.log(`[Anthropic] Generated ${wordCount} words - ${wordCountMet ? 'MET' : 'NOT MET'}`)
+  console.log(`[Anthropic] Generated ${wordCount} words in ${duration}ms`)
+  console.log(`[Anthropic] Word count target: ${settings.minWordCount}-${settings.maxWordCount} - ${wordCountMet ? 'MET ✅' : 'NOT MET ❌'}`)
 
   return {
     title: parsed.title || topic,
@@ -500,9 +528,12 @@ async function generateWithGroq(
 ): Promise<GeneratedContent> {
   console.log(`[Groq] Generating content for: "${topic}" with model: ${model}`)
   console.log(`[Groq] Word count target: ${settings.minWordCount}-${settings.maxWordCount}`)
+  
+  // Groq has a lower max token limit
+  const groqMaxTokens = Math.min(8192, MAX_OUTPUT_TOKENS)
+  console.log(`[Groq] Max output tokens: ${groqMaxTokens}`)
 
   const prompt = buildPrompt(topic, settings)
-  const maxTokens = Math.min(8192, calculateMaxTokens(settings.maxWordCount)) // Groq has lower limits
 
   const startTime = Date.now()
 
@@ -522,11 +553,12 @@ async function generateWithGroq(
         { role: 'user', content: prompt },
       ],
       temperature: 0.7,
-      max_tokens: maxTokens,
+      max_tokens: groqMaxTokens,
     }),
   })
 
-  console.log(`[Groq] Response received in ${Date.now() - startTime}ms`)
+  const duration = Date.now() - startTime
+  console.log(`[Groq] Response received in ${duration}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -537,6 +569,17 @@ async function generateWithGroq(
   }
 
   const data = await response.json()
+  
+  // Log finish reason
+  const finishReason = data.choices?.[0]?.finish_reason
+  const usage = data.usage
+  console.log(`[Groq] Finish reason: ${finishReason}`)
+  console.log(`[Groq] Token usage: ${JSON.stringify(usage)}`)
+  
+  if (finishReason === 'length') {
+    console.warn(`[Groq] ⚠️ Output was truncated due to token limit!`)
+  }
+  
   const text = data.choices?.[0]?.message?.content || ''
   
   if (!text) {
@@ -557,7 +600,8 @@ async function generateWithGroq(
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
   const wordCountMet = wordCount >= settings.minWordCount && wordCount <= settings.maxWordCount
 
-  console.log(`[Groq] Generated ${wordCount} words - ${wordCountMet ? 'MET' : 'NOT MET'}`)
+  console.log(`[Groq] Generated ${wordCount} words in ${duration}ms`)
+  console.log(`[Groq] Word count target: ${settings.minWordCount}-${settings.maxWordCount} - ${wordCountMet ? 'MET ✅' : 'NOT MET ❌'}`)
 
   return {
     title: parsed.title || topic,
@@ -585,7 +629,7 @@ async function generateWithGroq(
 }
 
 // ============================================================================
-// AI GENERATION: OPENROUTER
+// AI GENERATION: OPENROUTER - FIXED WITH 16384 MAX TOKENS
 // ============================================================================
 
 async function generateWithOpenRouter(
@@ -594,13 +638,32 @@ async function generateWithOpenRouter(
   topic: string,
   settings: ContentSettings
 ): Promise<GeneratedContent> {
-  console.log(`[OpenRouter] Generating content for: "${topic}" with model: ${model}`)
+  console.log(`[OpenRouter] ========== STARTING GENERATION ==========`)
+  console.log(`[OpenRouter] Model: ${model}`)
+  console.log(`[OpenRouter] Topic: "${topic}"`)
   console.log(`[OpenRouter] Word count target: ${settings.minWordCount}-${settings.maxWordCount}`)
+  console.log(`[OpenRouter] Max output tokens: ${MAX_OUTPUT_TOKENS}`)
+  console.log(`[OpenRouter] Timeout: ${AI_TIMEOUT_MS}ms`)
 
   const prompt = buildPrompt(topic, settings)
-  const maxTokens = calculateMaxTokens(settings.maxWordCount)
 
   const startTime = Date.now()
+
+  const requestBody = {
+    model: model || 'openai/gpt-4o-mini',
+    messages: [
+      { 
+        role: 'system', 
+        content: `You are an expert SEO content writer. You MUST write between ${settings.minWordCount} and ${settings.maxWordCount} words. This is a HARD requirement. Respond with valid JSON only, no markdown code blocks.` 
+      },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0.7,
+    max_tokens: MAX_OUTPUT_TOKENS, // CRITICAL: Set to 16384 to prevent length cutoff
+    top_p: 0.9,
+  }
+
+  console.log(`[OpenRouter] Request body max_tokens: ${requestBody.max_tokens}`)
 
   const response = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -610,55 +673,84 @@ async function generateWithOpenRouter(
       'HTTP-Referer': 'https://page-perfector.app',
       'X-Title': 'Page Perfector',
     },
-    body: JSON.stringify({
-      model: model || 'openai/gpt-4o-mini',
-      messages: [
-        { 
-          role: 'system', 
-          content: `You are an expert SEO content writer. Write EXACTLY ${settings.minWordCount}-${settings.maxWordCount} words. Respond with valid JSON only.` 
-        },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.7,
-      max_tokens: maxTokens,
-    }),
+    body: JSON.stringify(requestBody),
   })
 
-  console.log(`[OpenRouter] Response received in ${Date.now() - startTime}ms`)
+  const duration = Date.now() - startTime
+  console.log(`[OpenRouter] Response received in ${duration}ms`)
 
   if (!response.ok) {
     const errorText = await response.text()
+    console.error(`[OpenRouter] API error ${response.status}:`, errorText)
+    
     if (response.status === 401) {
       throw new Error('INVALID_API_KEY: Your OpenRouter API key is invalid.')
     }
     if (response.status === 402) {
       throw new Error('INSUFFICIENT_CREDITS: Your OpenRouter account has insufficient credits.')
     }
-    throw new Error(`OpenRouter API error: ${response.status}`)
+    if (response.status === 429) {
+      throw new Error('RATE_LIMIT: OpenRouter rate limit exceeded. Please wait and try again.')
+    }
+    
+    throw new Error(`OpenRouter API error: ${response.status} - ${errorText.slice(0, 200)}`)
   }
 
   const data = await response.json()
+  
+  // ========== CRITICAL: Log finish reason to detect truncation ==========
+  const finishReason = data.choices?.[0]?.finish_reason
+  const usage = data.usage
+  
+  console.log(`[OpenRouter] ========== RESPONSE ANALYSIS ==========`)
+  console.log(`[OpenRouter] Finish reason: ${finishReason}`)
+  console.log(`[OpenRouter] Token usage: prompt=${usage?.prompt_tokens}, completion=${usage?.completion_tokens}, total=${usage?.total_tokens}`)
+  
+  if (finishReason === 'length') {
+    console.error(`[OpenRouter] ❌ OUTPUT WAS TRUNCATED DUE TO TOKEN LIMIT!`)
+    console.error(`[OpenRouter] The model hit its output token limit. Generated ${usage?.completion_tokens} tokens.`)
+    console.error(`[OpenRouter] This should NOT happen with max_tokens=${MAX_OUTPUT_TOKENS}`)
+  } else {
+    console.log(`[OpenRouter] ✅ Output completed naturally (finish_reason: ${finishReason})`)
+  }
+  
   const text = data.choices?.[0]?.message?.content || ''
   
   if (!text) {
-    throw new Error('AI_EMPTY_RESPONSE: OpenRouter returned an empty response.')
+    console.error(`[OpenRouter] Empty response! Full response:`, JSON.stringify(data).slice(0, 500))
+    throw new Error('AI_EMPTY_RESPONSE: OpenRouter returned an empty response. This may be due to rate limiting or model issues.')
   }
+  
+  console.log(`[OpenRouter] Raw response length: ${text.length} characters`)
   
   let jsonStr = text
   const match = text.match(/\{[\s\S]*\}/)
-  if (match) jsonStr = match[0]
+  if (match) {
+    jsonStr = match[0]
+  } else {
+    console.error(`[OpenRouter] No JSON found in response! First 500 chars:`, text.slice(0, 500))
+    throw new Error('AI_PARSE_ERROR: No valid JSON found in AI response.')
+  }
   
   let parsed
   try {
     parsed = JSON.parse(jsonStr)
   } catch (parseError) {
-    throw new Error('AI_PARSE_ERROR: Failed to parse AI response.')
+    console.error(`[OpenRouter] JSON parse error! First 500 chars of extracted JSON:`, jsonStr.slice(0, 500))
+    throw new Error('AI_PARSE_ERROR: Failed to parse AI response as JSON.')
   }
   
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
   const wordCountMet = wordCount >= settings.minWordCount && wordCount <= settings.maxWordCount
 
-  console.log(`[OpenRouter] Generated ${wordCount} words - ${wordCountMet ? 'MET' : 'NOT MET'}`)
+  console.log(`[OpenRouter] ========== GENERATION COMPLETE ==========`)
+  console.log(`[OpenRouter] Generated ${wordCount} words in ${duration}ms`)
+  console.log(`[OpenRouter] Target: ${settings.minWordCount}-${settings.maxWordCount} words`)
+  console.log(`[OpenRouter] Word count met: ${wordCountMet ? 'YES ✅' : 'NO ❌'}`)
+  
+  if (!wordCountMet && finishReason === 'length') {
+    console.error(`[OpenRouter] ❌ Word count NOT met because output was truncated!`)
+  }
 
   return {
     title: parsed.title || topic,
@@ -675,6 +767,7 @@ async function generateWithOpenRouter(
     sections: [
       { type: 'tldr', content: parsed.tldrSummary || '' },
       { type: 'takeaways', data: parsed.keyTakeaways || [] },
+      { type: 'faqs', data: parsed.faqs || [] },
       { type: 'paragraph', content: parsed.content || '' },
     ],
     excerpt: parsed.excerpt || '',
@@ -699,6 +792,8 @@ async function generateWithAI(
   console.log('[generateWithAI] Model:', aiConfig.model)
   console.log('[generateWithAI] Topic:', topic)
   console.log('[generateWithAI] Word Count Target:', settings.minWordCount, '-', settings.maxWordCount)
+  console.log('[generateWithAI] Max Tokens:', MAX_OUTPUT_TOKENS)
+  console.log('[generateWithAI] Timeout:', AI_TIMEOUT_MS, 'ms')
 
   const { provider, apiKey, model } = aiConfig
 
@@ -755,7 +850,9 @@ async function processJob(
   console.log(`[Job ${jobId}] ========== STARTING BACKGROUND PROCESSING ==========`)
   console.log(`[Job ${jobId}] Topic: ${topic}`)
   console.log(`[Job ${jobId}] AI Provider: ${aiConfig.provider}`)
+  console.log(`[Job ${jobId}] AI Model: ${aiConfig.model}`)
   console.log(`[Job ${jobId}] Word Count: ${contentSettings.minWordCount}-${contentSettings.maxWordCount}`)
+  console.log(`[Job ${jobId}] Max Tokens: ${MAX_OUTPUT_TOKENS}`)
   
   try {
     await updateProgress(supabase, jobId, 15, 'Analyzing content requirements...')
@@ -818,29 +915,33 @@ serve(async (req: Request): Promise<Response> => {
   }
 
   console.log('[optimize-content] ========== NEW REQUEST ==========')
-  console.log('[optimize-content] Version: v12.0.0 (with word count settings)')
+  console.log('[optimize-content] Version: v13.0.0 (max_tokens: 16384, timeout: 300s)')
 
   try {
     const body = await req.json()
     
-    // Extract content settings with defaults
+    // Extract content settings from multiple possible locations
     const contentSettings: ContentSettings = {
-      minWordCount: body.contentSettings?.minWordCount || body.minWordCount || 2000,
-      maxWordCount: body.contentSettings?.maxWordCount || body.maxWordCount || 3000,
-      enableFaqs: body.contentSettings?.enableFaqs ?? true,
-      enableToc: body.contentSettings?.enableToc ?? true,
-      enableKeyTakeaways: body.contentSettings?.enableKeyTakeaways ?? true,
+      minWordCount: body.contentSettings?.minWordCount || body.advanced?.minWordCount || body.minWordCount || 2000,
+      maxWordCount: body.contentSettings?.maxWordCount || body.advanced?.maxWordCount || body.maxWordCount || 3000,
+      enableFaqs: body.contentSettings?.enableFaqs ?? body.advanced?.enableFaqs ?? true,
+      enableToc: body.contentSettings?.enableToc ?? body.advanced?.enableToc ?? true,
+      enableKeyTakeaways: body.contentSettings?.enableKeyTakeaways ?? body.advanced?.enableKeyTakeaways ?? true,
     }
     
     console.log('[optimize-content] Content settings:', JSON.stringify(contentSettings))
-    console.log('[optimize-content] Received:', JSON.stringify({
+    console.log('[optimize-content] Max tokens:', MAX_OUTPUT_TOKENS)
+    console.log('[optimize-content] Timeout:', AI_TIMEOUT_MS, 'ms')
+    
+    const logData = {
       url: body.url || body.siteUrl,
       postTitle: body.postTitle,
       aiProvider: body.aiConfig?.provider,
       hasAiKey: !!body.aiConfig?.apiKey,
       aiModel: body.aiConfig?.model,
       wordCount: `${contentSettings.minWordCount}-${contentSettings.maxWordCount}`,
-    }))
+    }
+    console.log('[optimize-content] Received:', JSON.stringify(logData))
 
     // Validate AI config
     const aiConfig = body.aiConfig as AIConfig | undefined
@@ -917,10 +1018,14 @@ serve(async (req: Request): Promise<Response> => {
       success: true,
       jobId: jobId,
       pageId: body.pageId || null,
-      message: `AI optimization started. Target: ${contentSettings.minWordCount}-${contentSettings.maxWordCount} words.`,
+      message: `AI optimization started. Target: ${contentSettings.minWordCount}-${contentSettings.maxWordCount} words. Max tokens: ${MAX_OUTPUT_TOKENS}.`,
       aiProvider: aiConfig.provider,
       aiModel: aiConfig.model,
       contentSettings,
+      config: {
+        maxTokens: MAX_OUTPUT_TOKENS,
+        timeoutMs: AI_TIMEOUT_MS,
+      },
     })
 
   } catch (err) {
