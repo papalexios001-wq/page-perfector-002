@@ -1,6 +1,6 @@
 // ============================================================================
-// OPTIMIZE-CONTENT EDGE FUNCTION - COMPLETE SINGLE FILE (NO EXTERNAL IMPORTS)
-// Version: 9.0.0 - Enterprise-Grade with ALL AI providers inline
+// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v10.0.0
+// FIXED: Removed hardcoded fallback content - AI configuration REQUIRED
 // ============================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -56,6 +56,27 @@ function jsonResponse(data: Record<string, unknown>, status = 200): Response {
 }
 
 // ============================================================================
+// HELPER: Error Response with Actionable Guidance
+// ============================================================================
+
+function errorResponse(
+  code: string, 
+  message: string, 
+  details: Record<string, unknown> = {},
+  status = 400
+): Response {
+  return jsonResponse({
+    success: false,
+    error: code,
+    message,
+    details: {
+      ...details,
+      timestamp: new Date().toISOString(),
+    },
+  }, status)
+}
+
+// ============================================================================
 // AI GENERATION: GOOGLE GEMINI
 // ============================================================================
 
@@ -104,6 +125,17 @@ OUTPUT FORMAT (respond ONLY with valid JSON, no markdown code blocks):
   if (!response.ok) {
     const errorText = await response.text()
     console.error(`[Gemini] API error ${response.status}:`, errorText)
+    
+    if (response.status === 400 && errorText.includes('API_KEY_INVALID')) {
+      throw new Error('INVALID_API_KEY: Your Google AI API key is invalid. Please check your API key in the Configuration tab.')
+    }
+    if (response.status === 403) {
+      throw new Error('API_KEY_FORBIDDEN: Your Google AI API key does not have permission to use this model. Check your API key permissions.')
+    }
+    if (response.status === 429) {
+      throw new Error('RATE_LIMIT: Google AI rate limit exceeded. Please wait a moment and try again.')
+    }
+    
     throw new Error(`Gemini API error: ${response.status} - ${errorText.slice(0, 200)}`)
   }
 
@@ -111,7 +143,7 @@ OUTPUT FORMAT (respond ONLY with valid JSON, no markdown code blocks):
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
   
   if (!text) {
-    throw new Error('Empty response from Gemini API')
+    throw new Error('AI_EMPTY_RESPONSE: Gemini returned an empty response. Please try again.')
   }
   
   let jsonStr = text
@@ -125,7 +157,7 @@ OUTPUT FORMAT (respond ONLY with valid JSON, no markdown code blocks):
     parsed = JSON.parse(jsonStr)
   } catch (parseError) {
     console.error('[Gemini] JSON parse error, raw text:', text.slice(0, 500))
-    throw new Error('Failed to parse AI response as JSON')
+    throw new Error('AI_PARSE_ERROR: Failed to parse AI response. The AI returned malformed JSON. Please try again.')
   }
   
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
@@ -200,17 +232,39 @@ Respond with this exact JSON structure:
   if (!response.ok) {
     const errorText = await response.text()
     console.error(`[OpenAI] API error ${response.status}:`, errorText)
+    
+    if (response.status === 401) {
+      throw new Error('INVALID_API_KEY: Your OpenAI API key is invalid. Please check your API key in the Configuration tab.')
+    }
+    if (response.status === 429) {
+      throw new Error('RATE_LIMIT: OpenAI rate limit exceeded. Please wait a moment and try again, or check your billing.')
+    }
+    if (response.status === 403) {
+      throw new Error('API_KEY_FORBIDDEN: Your OpenAI API key does not have access to this model.')
+    }
+    
     throw new Error(`OpenAI API error: ${response.status}`)
   }
 
   const data = await response.json()
   const text = data.choices?.[0]?.message?.content || ''
   
+  if (!text) {
+    throw new Error('AI_EMPTY_RESPONSE: OpenAI returned an empty response. Please try again.')
+  }
+  
   let jsonStr = text
   const match = text.match(/\{[\s\S]*\}/)
   if (match) jsonStr = match[0]
   
-  const parsed = JSON.parse(jsonStr)
+  let parsed
+  try {
+    parsed = JSON.parse(jsonStr)
+  } catch (parseError) {
+    console.error('[OpenAI] JSON parse error, raw text:', text.slice(0, 500))
+    throw new Error('AI_PARSE_ERROR: Failed to parse AI response. Please try again.')
+  }
+  
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
   console.log(`[OpenAI] Generated ${wordCount} words`)
 
@@ -266,17 +320,37 @@ Respond with JSON only:
   })
 
   if (!response.ok) {
+    const errorText = await response.text()
+    console.error(`[Anthropic] API error ${response.status}:`, errorText)
+    
+    if (response.status === 401) {
+      throw new Error('INVALID_API_KEY: Your Anthropic API key is invalid. Please check your API key in the Configuration tab.')
+    }
+    if (response.status === 429) {
+      throw new Error('RATE_LIMIT: Anthropic rate limit exceeded. Please wait and try again.')
+    }
+    
     throw new Error(`Anthropic API error: ${response.status}`)
   }
 
   const data = await response.json()
   const text = data.content?.[0]?.text || ''
   
+  if (!text) {
+    throw new Error('AI_EMPTY_RESPONSE: Anthropic returned an empty response. Please try again.')
+  }
+  
   let jsonStr = text
   const match = text.match(/\{[\s\S]*\}/)
   if (match) jsonStr = match[0]
   
-  const parsed = JSON.parse(jsonStr)
+  let parsed
+  try {
+    parsed = JSON.parse(jsonStr)
+  } catch (parseError) {
+    throw new Error('AI_PARSE_ERROR: Failed to parse AI response. Please try again.')
+  }
+  
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
 
   return {
@@ -328,17 +402,37 @@ async function generateWithGroq(apiKey: string, model: string, topic: string): P
   })
 
   if (!response.ok) {
+    const errorText = await response.text()
+    console.error(`[Groq] API error ${response.status}:`, errorText)
+    
+    if (response.status === 401) {
+      throw new Error('INVALID_API_KEY: Your Groq API key is invalid. Please check your API key in the Configuration tab.')
+    }
+    if (response.status === 429) {
+      throw new Error('RATE_LIMIT: Groq rate limit exceeded. Please wait and try again.')
+    }
+    
     throw new Error(`Groq API error: ${response.status}`)
   }
 
   const data = await response.json()
   const text = data.choices?.[0]?.message?.content || ''
   
+  if (!text) {
+    throw new Error('AI_EMPTY_RESPONSE: Groq returned an empty response. Please try again.')
+  }
+  
   let jsonStr = text
   const match = text.match(/\{[\s\S]*\}/)
   if (match) jsonStr = match[0]
   
-  const parsed = JSON.parse(jsonStr)
+  let parsed
+  try {
+    parsed = JSON.parse(jsonStr)
+  } catch (parseError) {
+    throw new Error('AI_PARSE_ERROR: Failed to parse AI response. Please try again.')
+  }
+  
   const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
 
   return {
@@ -366,121 +460,142 @@ async function generateWithGroq(apiKey: string, model: string, topic: string): P
 }
 
 // ============================================================================
-// FALLBACK CONTENT (Only when AI not configured)
+// AI GENERATION: OPENROUTER
 // ============================================================================
 
-function generateFallbackContent(topic: string): GeneratedContent {
-  console.warn(`[Fallback] No AI configured, generating placeholder for: ${topic}`)
+async function generateWithOpenRouter(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
+  console.log(`[OpenRouter] Generating content for: "${topic}" with model: ${model}`)
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': 'https://page-perfector.app',
+      'X-Title': 'Page Perfector',
+    },
+    body: JSON.stringify({
+      model: model || 'openai/gpt-4o-mini',
+      messages: [
+        { 
+          role: 'system', 
+          content: 'You are an expert SEO content writer. Always respond with valid JSON only, no markdown.' 
+        },
+        { 
+          role: 'user', 
+          content: `Generate a comprehensive 1500-2500 word SEO blog post about: "${topic}"
+
+Respond with this exact JSON structure:
+{
+  "title": "SEO title (50-60 chars)",
+  "metaDescription": "Meta description (150-160 chars)",
+  "h1": "Main heading",
+  "h2s": ["Section 1", "Section 2", "Section 3", "Section 4", "Section 5"],
+  "content": "<p>Full HTML content with h2, h3, p, ul, li, strong tags. Write detailed paragraphs.</p>",
+  "tldrSummary": "2-3 sentence summary",
+  "keyTakeaways": ["Point 1", "Point 2", "Point 3", "Point 4", "Point 5"],
+  "excerpt": "2-3 sentence excerpt"
+}` 
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 4096,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error(`[OpenRouter] API error ${response.status}:`, errorText)
+    
+    if (response.status === 401) {
+      throw new Error('INVALID_API_KEY: Your OpenRouter API key is invalid. Please check your API key in the Configuration tab.')
+    }
+    if (response.status === 402) {
+      throw new Error('INSUFFICIENT_CREDITS: Your OpenRouter account has insufficient credits. Please add credits to continue.')
+    }
+    if (response.status === 429) {
+      throw new Error('RATE_LIMIT: OpenRouter rate limit exceeded. Please wait and try again.')
+    }
+    
+    throw new Error(`OpenRouter API error: ${response.status}`)
+  }
+
+  const data = await response.json()
+  const text = data.choices?.[0]?.message?.content || ''
   
-  const cleanTopic = topic.replace(/^(Quick Optimize:|Optimized:)\s*/i, '').trim() || 'Content'
+  if (!text) {
+    throw new Error('AI_EMPTY_RESPONSE: OpenRouter returned an empty response. Please try again.')
+  }
   
-  const content = `<h1>${cleanTopic}: A Comprehensive Guide</h1>
-
-<p><strong>⚠️ AI Provider Not Configured</strong></p>
-
-<p>This is placeholder content because no AI API key was configured. To get real, AI-generated content optimized for your specific topic, please configure your AI provider.</p>
-
-<h2>How to Enable AI Content Generation</h2>
-
-<ol>
-<li>Go to the <strong>Configuration</strong> tab in the app</li>
-<li>Select an AI Provider (Google Gemini, OpenAI, Anthropic, or Groq)</li>
-<li>Enter your API key</li>
-<li>Select a model</li>
-<li>Click <strong>"Validate API Key"</strong></li>
-</ol>
-
-<h2>Supported AI Providers</h2>
-
-<ul>
-<li><strong>Google Gemini</strong> - Fast and cost-effective (recommended, free tier available)</li>
-<li><strong>OpenAI GPT-4</strong> - High quality output</li>
-<li><strong>Anthropic Claude</strong> - Excellent for long-form content</li>
-<li><strong>Groq</strong> - Ultra-fast inference</li>
-</ul>
-
-<h2>What You'll Get with AI</h2>
-
-<p>When AI is configured, Page Perfector will generate:</p>
-
-<ul>
-<li>1500-2500 words of unique, relevant content</li>
-<li>SEO-optimized titles and meta descriptions</li>
-<li>Proper heading structure (H1, H2, H3)</li>
-<li>Key takeaways and TL;DR summaries</li>
-<li>Engaging, reader-friendly formatting</li>
-</ul>
-
-<p><strong>Configure your AI provider now to unlock real content generation!</strong></p>`
-
-  const wordCount = content.replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  let jsonStr = text
+  const match = text.match(/\{[\s\S]*\}/)
+  if (match) jsonStr = match[0]
   
+  let parsed
+  try {
+    parsed = JSON.parse(jsonStr)
+  } catch (parseError) {
+    throw new Error('AI_PARSE_ERROR: Failed to parse AI response. Please try again.')
+  }
+  
+  const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  console.log(`[OpenRouter] Generated ${wordCount} words`)
+
   return {
-    title: `${cleanTopic}: A Comprehensive Guide`,
-    optimizedTitle: `${cleanTopic}: A Comprehensive Guide`,
-    optimizedContent: content,
-    content: content,
+    title: parsed.title || topic,
+    optimizedTitle: parsed.title || topic,
+    optimizedContent: parsed.content || '',
+    content: parsed.content || '',
     wordCount,
-    qualityScore: 50,
-    seoScore: 50,
-    readabilityScore: 70,
-    metaDescription: `Configure your AI provider to generate real content about ${cleanTopic}.`,
-    h1: `${cleanTopic}: A Comprehensive Guide`,
-    h2s: ['How to Enable AI Content Generation', 'Supported AI Providers', 'What You\'ll Get with AI'],
+    qualityScore: Math.min(95, 75 + Math.floor(wordCount / 100)),
+    seoScore: 85,
+    readabilityScore: 80,
+    metaDescription: parsed.metaDescription || '',
+    h1: parsed.h1 || topic,
+    h2s: parsed.h2s || [],
     sections: [
-      { type: 'tldr', content: 'Configure an AI provider in the Configuration tab to generate real content.' },
-      { type: 'takeaways', data: ['Configure AI in Configuration tab', 'Enter your API key', 'Get real AI-generated content'] },
-      { type: 'paragraph', content: content },
+      { type: 'tldr', content: parsed.tldrSummary || '' },
+      { type: 'takeaways', data: parsed.keyTakeaways || [] },
+      { type: 'paragraph', content: parsed.content || '' },
+      { type: 'summary', content: parsed.excerpt || '' },
     ],
-    excerpt: 'Configure your AI provider for real content.',
-    author: 'Page Perfector',
+    excerpt: parsed.excerpt || '',
+    author: 'AI Content Expert',
     publishedAt: new Date().toISOString(),
   }
 }
 
 // ============================================================================
-// MAIN AI ROUTER
+// MAIN AI ROUTER - NO FALLBACK, ERRORS ARE PROPAGATED
 // ============================================================================
 
-async function generateWithAI(aiConfig: AIConfig | undefined, topic: string): Promise<GeneratedContent> {
+async function generateWithAI(aiConfig: AIConfig, topic: string): Promise<GeneratedContent> {
   console.log('[generateWithAI] ========== AI GENERATION START ==========')
-  console.log('[generateWithAI] Provider:', aiConfig?.provider)
-  console.log('[generateWithAI] Model:', aiConfig?.model)
-  console.log('[generateWithAI] Has API Key:', !!aiConfig?.apiKey)
+  console.log('[generateWithAI] Provider:', aiConfig.provider)
+  console.log('[generateWithAI] Model:', aiConfig.model)
   console.log('[generateWithAI] Topic:', topic)
-
-  if (!aiConfig?.apiKey) {
-    console.warn('[generateWithAI] No API key provided - using fallback')
-    return generateFallbackContent(topic)
-  }
 
   const { provider, apiKey, model } = aiConfig
 
-  try {
-    switch (provider.toLowerCase()) {
-      case 'google':
-        return await generateWithGemini(apiKey, model || 'gemini-2.0-flash', topic)
-      
-      case 'openai':
-        return await generateWithOpenAI(apiKey, model || 'gpt-4o-mini', topic)
-      
-      case 'anthropic':
-        return await generateWithAnthropic(apiKey, model || 'claude-3-haiku-20240307', topic)
-      
-      case 'groq':
-        return await generateWithGroq(apiKey, model || 'llama-3.1-8b-instant', topic)
-      
-      case 'openrouter':
-        return await generateWithOpenAI(apiKey, model || 'openai/gpt-4o-mini', topic)
-      
-      default:
-        console.warn(`[generateWithAI] Unknown provider: ${provider}, trying as Gemini`)
-        return await generateWithGemini(apiKey, model || 'gemini-2.0-flash', topic)
-    }
-  } catch (err) {
-    console.error('[generateWithAI] AI generation failed:', err)
-    console.error('[generateWithAI] Falling back to placeholder content')
-    return generateFallbackContent(topic)
+  // Route to appropriate provider - NO TRY/CATCH, let errors propagate
+  switch (provider.toLowerCase()) {
+    case 'google':
+      return await generateWithGemini(apiKey, model || 'gemini-2.0-flash', topic)
+    
+    case 'openai':
+      return await generateWithOpenAI(apiKey, model || 'gpt-4o-mini', topic)
+    
+    case 'anthropic':
+      return await generateWithAnthropic(apiKey, model || 'claude-3-haiku-20240307', topic)
+    
+    case 'groq':
+      return await generateWithGroq(apiKey, model || 'llama-3.1-8b-instant', topic)
+    
+    case 'openrouter':
+      return await generateWithOpenRouter(apiKey, model || 'openai/gpt-4o-mini', topic)
+    
+    default:
+      throw new Error(`UNSUPPORTED_PROVIDER: Provider "${provider}" is not supported. Supported providers: google, openai, anthropic, groq, openrouter`)
   }
 }
 
@@ -503,19 +618,19 @@ async function updateProgress(supabase: any, jobId: string, progress: number, st
 }
 
 // ============================================================================
-// BACKGROUND JOB PROCESSING
+// BACKGROUND JOB PROCESSING - WITH PROPER ERROR HANDLING
 // ============================================================================
 
 async function processJob(
   supabase: any, 
   jobId: string, 
   topic: string, 
-  aiConfig: AIConfig | undefined
+  aiConfig: AIConfig
 ): Promise<void> {
   console.log(`[Job ${jobId}] ========== STARTING BACKGROUND PROCESSING ==========`)
   console.log(`[Job ${jobId}] Topic: ${topic}`)
-  console.log(`[Job ${jobId}] AI Provider: ${aiConfig?.provider || 'NONE'}`)
-  console.log(`[Job ${jobId}] Has API Key: ${!!aiConfig?.apiKey}`)
+  console.log(`[Job ${jobId}] AI Provider: ${aiConfig.provider}`)
+  console.log(`[Job ${jobId}] AI Model: ${aiConfig.model}`)
   
   try {
     // Stage 1: 15%
@@ -526,8 +641,8 @@ async function processJob(
     await updateProgress(supabase, jobId, 30, 'Researching topic and keywords...')
     await new Promise(r => setTimeout(r, 300))
 
-    // Stage 3: 50% - CRITICAL: AI Generation
-    await updateProgress(supabase, jobId, 50, `Generating with ${aiConfig?.provider || 'fallback'}...`)
+    // Stage 3: 50% - CRITICAL: AI Generation (NO FALLBACK)
+    await updateProgress(supabase, jobId, 50, `Generating content with ${aiConfig.provider}...`)
     const result = await generateWithAI(aiConfig, topic)
 
     // Stage 4: 70%
@@ -555,11 +670,12 @@ async function processJob(
     }
 
   } catch (err) {
-    console.error(`[Job ${jobId}] ❌ FAILED:`, err)
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error during AI generation'
+    console.error(`[Job ${jobId}] ❌ FAILED:`, errorMessage)
     
     await supabase.from('jobs').update({
       status: 'failed',
-      error_message: err instanceof Error ? err.message : 'Unknown error',
+      error_message: errorMessage,
       completed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', jobId)
@@ -577,6 +693,7 @@ serve(async (req: Request): Promise<Response> => {
   }
 
   console.log('[optimize-content] ========== NEW REQUEST ==========')
+  console.log('[optimize-content] Timestamp:', new Date().toISOString())
 
   try {
     const body = await req.json()
@@ -589,16 +706,94 @@ serve(async (req: Request): Promise<Response> => {
       aiModel: body.aiConfig?.model,
     }))
 
-    const topic = body.postTitle || body.keyword || body.url || 'Content Optimization'
+    // ========================================================================
+    // VALIDATION: AI Configuration is REQUIRED - NO FALLBACK
+    // ========================================================================
+    
     const aiConfig = body.aiConfig as AIConfig | undefined
+    
+    if (!aiConfig) {
+      console.error('[optimize-content] REJECTED: No AI configuration provided')
+      return errorResponse(
+        'AI_NOT_CONFIGURED',
+        'AI configuration is required for content optimization.',
+        {
+          fix: 'Go to Configuration → AI Provider → Enter your API key and select a model',
+          supportedProviders: ['google', 'openai', 'anthropic', 'groq', 'openrouter'],
+        }
+      )
+    }
+
+    if (!aiConfig.apiKey) {
+      console.error('[optimize-content] REJECTED: No AI API key provided')
+      return errorResponse(
+        'AI_API_KEY_MISSING',
+        'AI API key is required for content optimization. Please configure your AI provider.',
+        {
+          fix: 'Go to Configuration → AI Provider → Enter your API key',
+          provider: aiConfig.provider || 'not specified',
+          supportedProviders: ['google', 'openai', 'anthropic', 'groq', 'openrouter'],
+        }
+      )
+    }
+
+    if (!aiConfig.provider) {
+      console.error('[optimize-content] REJECTED: No AI provider specified')
+      return errorResponse(
+        'AI_PROVIDER_MISSING',
+        'AI provider is required. Please select an AI provider in the Configuration tab.',
+        {
+          fix: 'Go to Configuration → AI Provider → Select a provider',
+          supportedProviders: ['google', 'openai', 'anthropic', 'groq', 'openrouter'],
+        }
+      )
+    }
+
+    if (!aiConfig.model) {
+      console.error('[optimize-content] REJECTED: No AI model specified')
+      return errorResponse(
+        'AI_MODEL_MISSING',
+        'AI model is required. Please select a model for your AI provider.',
+        {
+          fix: 'Go to Configuration → AI Provider → Select a model',
+          provider: aiConfig.provider,
+        }
+      )
+    }
+
+    // Validate provider is supported
+    const supportedProviders = ['google', 'openai', 'anthropic', 'groq', 'openrouter']
+    if (!supportedProviders.includes(aiConfig.provider.toLowerCase())) {
+      console.error('[optimize-content] REJECTED: Unsupported provider:', aiConfig.provider)
+      return errorResponse(
+        'UNSUPPORTED_PROVIDER',
+        `AI provider "${aiConfig.provider}" is not supported.`,
+        {
+          fix: 'Select one of the supported providers in Configuration',
+          supportedProviders,
+        }
+      )
+    }
+
+    const topic = body.postTitle || body.keyword || body.url || 'Content Optimization'
+    
+    console.log('[optimize-content] ✓ AI Configuration validated')
+    console.log('[optimize-content] Provider:', aiConfig.provider)
+    console.log('[optimize-content] Model:', aiConfig.model)
+    console.log('[optimize-content] Topic:', topic)
 
     // Get Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
     
     if (!supabaseUrl || !supabaseKey) {
-      console.error('[optimize-content] Supabase not configured')
-      return jsonResponse({ success: false, error: 'Supabase not configured' }, 500)
+      console.error('[optimize-content] FATAL: Supabase not configured')
+      return errorResponse(
+        'SERVER_ERROR',
+        'Server configuration error. Please contact support.',
+        {},
+        500
+      )
     }
     
     const supabase = createClient(supabaseUrl, supabaseKey, { 
@@ -615,7 +810,7 @@ serve(async (req: Request): Promise<Response> => {
       page_id: body.pageId || null,
       status: 'running',
       progress: 5,
-      current_step: 'Initializing optimization...',
+      current_step: 'Initializing AI optimization...',
       started_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -623,14 +818,20 @@ serve(async (req: Request): Promise<Response> => {
 
     if (insertError) {
       console.error('[optimize-content] Job insert failed:', insertError)
-      return jsonResponse({ success: false, error: insertError.message })
+      return errorResponse(
+        'DATABASE_ERROR',
+        'Failed to create optimization job. Please try again.',
+        { error: insertError.message },
+        500
+      )
     }
 
     console.log('[optimize-content] Job created, starting background processing...')
 
     // Start background processing (non-blocking)
+    // AI config is now validated and REQUIRED - no fallback
     processJob(supabase, jobId, topic, aiConfig).catch(err => {
-      console.error('[optimize-content] Background error:', err)
+      console.error('[optimize-content] Background processing error:', err)
     })
 
     // Return immediately with job ID
@@ -639,14 +840,18 @@ serve(async (req: Request): Promise<Response> => {
       success: true,
       jobId: jobId,
       pageId: body.pageId || null,
-      message: 'Optimization started. Poll job status for updates.'
+      message: 'AI optimization started. Poll job status for updates.',
+      aiProvider: aiConfig.provider,
+      aiModel: aiConfig.model,
     })
 
   } catch (err) {
     console.error('[optimize-content] Request error:', err)
-    return jsonResponse({
-      success: false,
-      error: err instanceof Error ? err.message : 'Unknown error'
-    })
+    return errorResponse(
+      'REQUEST_ERROR',
+      err instanceof Error ? err.message : 'An unexpected error occurred',
+      {},
+      500
+    )
   }
 })
