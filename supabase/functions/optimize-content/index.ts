@@ -1,5 +1,5 @@
 // ============================================================================
-// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v14.0.0
+// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v15.0.0
 // FIXED: Synchronous processing - await processJob before returning HTTP response// ============================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -10,7 +10,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
 // ============================================================================
 
 const AI_TIMEOUT_MS = 300000 // 300 seconds (5 minutes) for longer content
-const MAX_OUTPUT_TOKENS = 16384 // Maximum tokens for content generation
+const MAX_OUTPUT_TOKENS = 32768 // Maximum tokens for content generation
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -628,7 +628,7 @@ async function generateWithGroq(
 }
 
 // ============================================================================
-// AI GENERATION: OPENROUTER - FIXED WITH 16384 MAX TOKENS
+// AI GENERATION: OPENROUTER - FIXED WITH 32768 MAX TOKENS
 // ============================================================================
 
 async function generateWithOpenRouter(
@@ -658,7 +658,7 @@ async function generateWithOpenRouter(
       { role: 'user', content: prompt },
     ],
     temperature: 0.7,
-    max_tokens: MAX_OUTPUT_TOKENS, // CRITICAL: Set to 16384 to prevent length cutoff
+    max_tokens: MAX_OUTPUT_TOKENS, // CRITICAL: Set to 32768 to prevent length cutoff
     top_p: 0.9,
   }
 
@@ -914,7 +914,7 @@ serve(async (req: Request): Promise<Response> => {
   }
 
   console.log('[optimize-content] ========== NEW REQUEST ==========')
-  console.log('[optimize-content] Version: v14.0.0 (max_tokens: 16384, timeout: 300s)')
+  console.log('[optimize-content] Version: v15.0.0 (max_tokens: 32768, timeout: 300s)')
 
   try {
     const body = await req.json()
