@@ -1,5 +1,5 @@
 // ============================================================================
-// QUICK OPTIMIZE - FIXED VERSION THAT PASSES AI CONFIG
+// QUICK OPTIMIZE - FIXED VERSION
 // ============================================================================
 
 import { useState, useCallback, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
@@ -11,14 +11,16 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { usePagesStore } from '@/stores/pages-store';
-import { useConfigStore } from '@/stores/config-store'; // ← ADD THIS IMPORT
+import { useConfigStore } from '@/stores/config-store';
 import { toast } from 'sonner';
 import { invokeEdgeFunction, isSupabaseConfigured, getSupabaseStatus } from '@/lib/supabase';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
 import { BlogPostRenderer } from '../blog/BlogPostComponents';
 
-// Error Boundary (unchanged)
+// ============================================================================
+// ERROR BOUNDARY
+// ============================================================================
 interface ErrorBoundaryProps {
   children: ReactNode;
   onReset?: () => void;
@@ -70,7 +72,9 @@ class RenderErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 }
 
-// Types
+// ============================================================================
+// TYPES
+// ============================================================================
 interface JobData {
   id: string;
   status: 'pending' | 'queued' | 'running' | 'completed' | 'failed';
@@ -103,7 +107,7 @@ interface OptimizationResult {
 // ============================================================================
 export function QuickOptimize() {
   const { addPages, updatePage, addActivityLog } = usePagesStore();
-  const { ai } = useConfigStore(); // ← ADD THIS LINE
+  const { ai } = useConfigStore();
   const navigate = useNavigate();
   
   // Form State
@@ -258,9 +262,7 @@ export function QuickOptimize() {
       setStatusMessage('Calling optimization service...');
       setProgress(5);
 
-      // ====================================================================
-      // CRITICAL FIX: Build AI config payload
-      // ====================================================================
+      // Build AI config payload - ONLY DECLARATION IN THIS FILE
       const aiConfigPayload = isAiConfigured ? {
         provider: ai.provider,
         apiKey: ai.apiKey,
@@ -274,35 +276,21 @@ export function QuickOptimize() {
         isConfigured: isAiConfigured,
       });
 
-      // Build AI config payload
-const aiConfigPayload = (ai.apiKey && ai.provider && ai.model) ? {
-  provider: ai.provider,
-  apiKey: ai.apiKey,
-  model: ai.model,
-} : undefined;
-
-console.log('[QuickOptimize] AI Config:', {
-  provider: ai.provider,
-  hasApiKey: !!ai.apiKey,
-  model: ai.model,
-  isConfigured: !!aiConfigPayload,
-});
-
-const { data, error: invokeError } = await invokeEdgeFunction<{
-  success: boolean;
-  jobId?: string;
-  message?: string;
-  error?: string;
-}>('optimize-content', {
-  url: pageUrl,
-  siteUrl: pageUrl,
-  mode: 'optimize',
-  postTitle: targetKeyword || pageUrl,
-  keyword: targetKeyword || undefined,
-  outputMode: outputMode,
-  aiConfig: aiConfigPayload,
-});
-
+      // Call edge function WITH AI CONFIG
+      const { data, error: invokeError } = await invokeEdgeFunction<{
+        success: boolean;
+        jobId?: string;
+        message?: string;
+        error?: string;
+      }>('optimize-content', {
+        url: pageUrl,
+        siteUrl: pageUrl,
+        mode: 'optimize',
+        postTitle: targetKeyword || pageUrl,
+        keyword: targetKeyword || undefined,
+        outputMode: outputMode,
+        aiConfig: aiConfigPayload,
+      });
 
       console.log('[QuickOptimize] Edge function response:', data, invokeError);
 
