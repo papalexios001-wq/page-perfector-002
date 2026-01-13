@@ -71,10 +71,10 @@ serve(async (req: Request): Promise<Response> => {
     // VALIDATION
     // ========================================================================
 
-    if (!body.content || body.content.length < 50) {
+    if (!body.content || body.content.length < 10) {
       return errorResponse(
         'CONTENT_TOO_SHORT',
-        'Content must be at least 50 characters long.',
+        'Content must be at least 10 characters long.',
         { contentLength: body.content?.length || 0 }
       )
     }
