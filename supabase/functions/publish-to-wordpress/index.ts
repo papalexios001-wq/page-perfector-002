@@ -1,5 +1,5 @@
 // ============================================================================
-// PUBLISH TO WORDPRESS - ENTERPRISE SOTA v2.0.0
+// PUBLISH TO WORDPRESS - ENTERPRISE SOTA v2.1.0
 // Fixed: Better error handling, debugging, and WordPress API support
 // ============================================================================
 
