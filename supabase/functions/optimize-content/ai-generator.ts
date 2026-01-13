@@ -1,17 +1,9 @@
-/**
- * Enterprise-grade AI Content Generation Module
- * Real AI integration with Google Gemini for content optimization
- * @module ai-generator
- * @version 2.0.0
- */
-
-import { GoogleGenerativeAI } from 'npm:@google/generative-ai@0.21.0'
-
 // ============================================================================
-// TYPE DEFINITIONS
+// AI CONTENT GENERATOR - ENTERPRISE VERSION 8.0
+// Supports: Google Gemini, OpenAI, Anthropic, Groq
 // ============================================================================
 
-export interface GeneratedContent {
+interface GeneratedContent {
   title: string
   optimizedTitle: string
   optimizedContent: string
@@ -23,263 +15,445 @@ export interface GeneratedContent {
   metaDescription: string
   h1: string
   h2s: string[]
-  sections: ContentSection[]
+  sections: Array<{ type: string; content?: string; data?: unknown }>
   excerpt: string
   author: string
   publishedAt: string
 }
 
-export interface ContentSection {
-  type: 'tldr' | 'heading' | 'paragraph' | 'takeaways' | 'quote' | 'summary'
-  content?: string
-  data?: Record<string, unknown>
-}
-
 interface AIConfig {
+  provider: string
+  apiKey: string
   model: string
-  temperature: number
-  topP: number
-  topK: number
-  maxOutputTokens: number
 }
 
 // ============================================================================
-// CONFIGURATION
+// GOOGLE GEMINI
 // ============================================================================
+async function generateWithGemini(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
+  console.log(`[Gemini] Generating content for: "${topic}" with model: ${model}`)
+  
+  const prompt = `You are an expert SEO content writer. Generate a comprehensive, engaging blog post.
 
-const AI_CONFIG: AIConfig = {
-  model: 'gemini-1.5-flash',
-  temperature: 0.7,
-  topP: 0.8,
-  topK: 40,
-  maxOutputTokens: 4096,
-}
+TOPIC: ${topic}
 
-// ============================================================================
-// MAIN EXPORT: GENERATE REAL CONTENT
-// ============================================================================
+REQUIREMENTS:
+- Write 1500-2500 words of high-quality content
+- Use conversational but authoritative tone
+- Include specific examples and actionable advice
+- Structure with clear H2 and H3 headings
+- Make it engaging and valuable for readers
 
-export async function generateRealContent(
-  title: string,
-  url: string
-): Promise<GeneratedContent> {
-  const startTime = Date.now()
-  console.log('[AI-Generator] Starting content generation for:', title)
-
-  try {
-    const apiKey = Deno.env.get('GEMINI_API_KEY')
-
-    if (!apiKey) {
-      console.warn('[AI-Generator] GEMINI_API_KEY not set, using optimized template')
-      return generateOptimizedTemplate(title, url)
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey)
-    const model = genAI.getGenerativeModel({
-      model: AI_CONFIG.model,
-      generationConfig: {
-        temperature: AI_CONFIG.temperature,
-        topP: AI_CONFIG.topP,
-        topK: AI_CONFIG.topK,
-        maxOutputTokens: AI_CONFIG.maxOutputTokens,
-      },
-    })
-
-    const prompt = buildOptimizedPrompt(title, url)
-    const result = await model.generateContent(prompt)
-    const text = result.response.text()
-
-    // Parse AI response
-    const parsed = parseAIResponse(text, title)
-    const elapsedMs = Date.now() - startTime
-    
-    console.log(`[AI-Generator] Content generated in ${elapsedMs}ms`)
-    return parsed
-
-  } catch (error) {
-    console.error('[AI-Generator] Error:', error)
-    return generateOptimizedTemplate(title, url)
-  }
-}
-
-// ============================================================================
-// PROMPT ENGINEERING
-// ============================================================================
-
-function buildOptimizedPrompt(title: string, _url: string): string {
-  return `Generate SEO-optimized content for: "${title}"
-
-Requirements:
-- Professional, engaging tone
-- 1500-2000 words
-- Proper HTML structure with h1, h2, h3 tags
-- Include actionable insights
-- SEO-optimized meta description (150-160 chars)
-
-Return ONLY valid JSON (no markdown):
+OUTPUT FORMAT (respond ONLY with valid JSON, no markdown code blocks):
 {
-  "title": "optimized title",
-  "content": "<h1>Title</h1><p>Full HTML content...</p>",
-  "metaDescription": "150 char description",
-  "h2s": ["Section 1", "Section 2", "Section 3"],
-  "excerpt": "2 sentence summary"
+  "title": "Compelling SEO title (50-60 chars)",
+  "metaDescription": "Engaging meta description (150-160 chars)",
+  "h1": "Main H1 heading",
+  "h2s": ["H2 heading 1", "H2 heading 2", "H2 heading 3", "H2 heading 4", "H2 heading 5"],
+  "content": "<p>Full HTML content with h2, h3, p, ul, li, strong, em tags. Write comprehensive paragraphs.</p>",
+  "tldrSummary": "A 2-3 sentence TL;DR summary",
+  "keyTakeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3", "Takeaway 4", "Takeaway 5"],
+  "excerpt": "A compelling 2-3 sentence excerpt"
 }`
-}
 
-// ============================================================================
-// RESPONSE PARSING
-// ============================================================================
-
-function parseAIResponse(text: string, originalTitle: string): GeneratedContent {
-  try {
-    // Clean JSON from potential markdown wrapping
-    const cleanedText = text.replace(/```json\n?|\n?```/g, '').trim()
-    const parsed = JSON.parse(cleanedText)
-
-    const cleanTitle = parsed.title || originalTitle
-    const content = parsed.content || generateDefaultHTML(cleanTitle)
-    const wordCount = content.replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
-
-    return {
-      title: cleanTitle,
-      optimizedTitle: cleanTitle,
-      optimizedContent: content,
-      content: content,
-      wordCount,
-      qualityScore: calculateQualityScore(content),
-      seoScore: calculateSEOScore(content, cleanTitle),
-      readabilityScore: calculateReadabilityScore(content),
-      metaDescription: parsed.metaDescription || `Comprehensive guide to ${cleanTitle}`,
-      h1: cleanTitle,
-      h2s: parsed.h2s || extractH2s(content),
-      sections: buildSections(cleanTitle, content),
-      excerpt: parsed.excerpt || `Expert guide to ${cleanTitle} with actionable strategies.`,
-      author: 'AI Content Expert',
-      publishedAt: new Date().toISOString(),
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 8192,
+          topP: 0.9,
+        },
+      }),
     }
-  } catch (parseError) {
-    console.error('[AI-Generator] Parse error, using template:', parseError)
-    return generateOptimizedTemplate(originalTitle, '')
+  )
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error(`[Gemini] API error ${response.status}:`, errorText)
+    throw new Error(`Gemini API error: ${response.status} - ${errorText.slice(0, 200)}`)
   }
-}
 
-// ============================================================================
-// SCORING ALGORITHMS
-// ============================================================================
-
-function calculateQualityScore(content: string): number {
-  let score = 70
-  if (content.includes('<h2>')) score += 5
-  if (content.includes('<ul>') || content.includes('<ol>')) score += 5
-  if (content.length > 3000) score += 10
-  if (content.includes('<strong>') || content.includes('<em>')) score += 5
-  return Math.min(score, 98)
-}
-
-function calculateSEOScore(content: string, title: string): number {
-  let score = 65
-  const titleWords = title.toLowerCase().split(/\s+/)
-  const contentLower = content.toLowerCase()
+  const data = await response.json()
+  console.log(`[Gemini] Response received`)
   
-  titleWords.forEach(word => {
-    if (word.length > 3 && contentLower.includes(word)) score += 3
-  })
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
   
-  if (content.includes('<h1>')) score += 5
-  if ((content.match(/<h2>/g) || []).length >= 3) score += 5
-  return Math.min(score, 95)
-}
-
-function calculateReadabilityScore(content: string): number {
-  const textOnly = content.replace(/<[^>]*>/g, '')
-  const sentences = textOnly.split(/[.!?]+/).filter(Boolean)
-  const avgLength = textOnly.length / Math.max(sentences.length, 1)
+  if (!text) {
+    console.error('[Gemini] Empty response from API')
+    throw new Error('Empty response from Gemini API')
+  }
   
-  if (avgLength < 100) return 90
-  if (avgLength < 150) return 85
-  return 75
-}
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-function extractH2s(content: string): string[] {
-  const matches = content.match(/<h2[^>]*>([^<]+)<\/h2>/gi) || []
-  return matches.map(m => m.replace(/<[^>]*>/g, '').trim()).slice(0, 5)
-}
-
-function buildSections(title: string, content: string): ContentSection[] {
-  return [
-    { type: 'tldr', content: `A comprehensive guide to ${title} with expert insights.` },
-    { type: 'heading', content: `Understanding ${title}` },
-    { type: 'paragraph', content: `This guide covers essential strategies for ${title}.` },
-    { type: 'takeaways', data: { items: ['Master fundamentals', 'Implement strategies', 'Measure results'] } },
-    { type: 'summary', content: `Key takeaways for mastering ${title}.` },
-  ]
-}
-
-// ============================================================================
-// OPTIMIZED TEMPLATE FALLBACK
-// ============================================================================
-
-function generateOptimizedTemplate(title: string, _url: string): GeneratedContent {
-  const cleanTitle = title.replace(/^(Quick Optimize:|Optimized:)\s*/i, '').trim() || 'Optimized Content'
-  const content = generateDefaultHTML(cleanTitle)
-  const wordCount = content.replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  // Extract JSON from response
+  let jsonStr = text
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (jsonMatch) {
+    jsonStr = jsonMatch[0]
+  }
+  
+  let parsed
+  try {
+    parsed = JSON.parse(jsonStr)
+  } catch (parseError) {
+    console.error('[Gemini] JSON parse error:', parseError)
+    console.error('[Gemini] Raw text:', text.slice(0, 500))
+    throw new Error('Failed to parse AI response as JSON')
+  }
+  
+  const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  console.log(`[Gemini] Generated ${wordCount} words`)
 
   return {
-    title: cleanTitle,
-    optimizedTitle: cleanTitle,
-    optimizedContent: content,
-    content,
+    title: parsed.title || topic,
+    optimizedTitle: parsed.title || topic,
+    optimizedContent: parsed.content || '',
+    content: parsed.content || '',
     wordCount,
-    qualityScore: 92,
-    seoScore: 88,
-    readabilityScore: 85,
-    metaDescription: `Discover the ultimate guide to ${cleanTitle}. Expert strategies and actionable tips.`,
-    h1: cleanTitle,
-    h2s: [
-      `Understanding ${cleanTitle}`,
-      'Key Strategies for Success',
-      'Best Practices and Implementation',
-      'Measuring Results',
-      'Conclusion and Next Steps'
+    qualityScore: Math.min(95, 75 + Math.floor(wordCount / 100)),
+    seoScore: 85,
+    readabilityScore: 80,
+    metaDescription: parsed.metaDescription || '',
+    h1: parsed.h1 || parsed.title || topic,
+    h2s: parsed.h2s || [],
+    sections: [
+      { type: 'tldr', content: parsed.tldrSummary || '' },
+      { type: 'takeaways', data: parsed.keyTakeaways || [] },
+      { type: 'paragraph', content: parsed.content || '' },
+      { type: 'summary', content: parsed.excerpt || '' },
     ],
-    sections: buildSections(cleanTitle, content),
-    excerpt: `Comprehensive expert guide to ${cleanTitle} with proven strategies.`,
+    excerpt: parsed.excerpt || parsed.metaDescription || '',
     author: 'AI Content Expert',
     publishedAt: new Date().toISOString(),
   }
 }
 
-function generateDefaultHTML(title: string): string {
-  return `<h1>${title}</h1>
-<p class="lead">This comprehensive guide explores everything you need to know about ${title}. Our AI-powered optimization delivers maximum SEO impact and reader engagement.</p>
+// ============================================================================
+// OPENAI
+// ============================================================================
+async function generateWithOpenAI(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
+  console.log(`[OpenAI] Generating content for: "${topic}" with model: ${model}`)
 
-<h2>Understanding ${title}</h2>
-<p>In today's competitive landscape, mastering ${title} is essential for success. This section breaks down fundamental concepts and provides actionable insights you can implement immediately.</p>
-<p>The key to success lies in understanding the core principles and applying them consistently. Whether you're a beginner or an expert, these strategies will help you achieve your goals.</p>
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: model || 'gpt-4o-mini',
+      messages: [
+        { 
+          role: 'system', 
+          content: 'You are an expert SEO content writer. Always respond with valid JSON only, no markdown.' 
+        },
+        { 
+          role: 'user', 
+          content: `Generate a comprehensive 1500-2500 word SEO blog post about: "${topic}"
 
-<h2>Key Strategies for Success</h2>
-<p>Implementing effective strategies requires a systematic approach. Here are proven methods that deliver results:</p>
+Respond with this exact JSON structure:
+{
+  "title": "SEO title (50-60 chars)",
+  "metaDescription": "Meta description (150-160 chars)",
+  "h1": "Main heading",
+  "h2s": ["Section 1", "Section 2", "Section 3", "Section 4", "Section 5"],
+  "content": "<p>Full HTML content with h2, h3, p, ul, li, strong tags. Write detailed paragraphs.</p>",
+  "tldrSummary": "2-3 sentence summary",
+  "keyTakeaways": ["Point 1", "Point 2", "Point 3", "Point 4", "Point 5"],
+  "excerpt": "2-3 sentence excerpt"
+}` 
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 4096,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error(`[OpenAI] API error ${response.status}:`, errorText)
+    throw new Error(`OpenAI API error: ${response.status}`)
+  }
+
+  const data = await response.json()
+  const text = data.choices?.[0]?.message?.content || ''
+  
+  let jsonStr = text
+  const match = text.match(/\{[\s\S]*\}/)
+  if (match) jsonStr = match[0]
+  
+  const parsed = JSON.parse(jsonStr)
+  const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  console.log(`[OpenAI] Generated ${wordCount} words`)
+
+  return {
+    title: parsed.title || topic,
+    optimizedTitle: parsed.title || topic,
+    optimizedContent: parsed.content || '',
+    content: parsed.content || '',
+    wordCount,
+    qualityScore: Math.min(95, 75 + Math.floor(wordCount / 100)),
+    seoScore: 85,
+    readabilityScore: 80,
+    metaDescription: parsed.metaDescription || '',
+    h1: parsed.h1 || topic,
+    h2s: parsed.h2s || [],
+    sections: [
+      { type: 'tldr', content: parsed.tldrSummary || '' },
+      { type: 'takeaways', data: parsed.keyTakeaways || [] },
+      { type: 'paragraph', content: parsed.content || '' },
+      { type: 'summary', content: parsed.excerpt || '' },
+    ],
+    excerpt: parsed.excerpt || '',
+    author: 'AI Content Expert',
+    publishedAt: new Date().toISOString(),
+  }
+}
+
+// ============================================================================
+// ANTHROPIC (CLAUDE)
+// ============================================================================
+async function generateWithAnthropic(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
+  console.log(`[Anthropic] Generating content for: "${topic}" with model: ${model}`)
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: model || 'claude-3-haiku-20240307',
+      max_tokens: 4096,
+      messages: [{ 
+        role: 'user', 
+        content: `Generate a comprehensive 1500-2500 word SEO blog post about: "${topic}"
+
+Respond with JSON only:
+{"title":"...", "metaDescription":"...", "h1":"...", "h2s":["..."], "content":"<p>HTML content...</p>", "tldrSummary":"...", "keyTakeaways":["..."], "excerpt":"..."}` 
+      }],
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Anthropic API error: ${response.status}`)
+  }
+
+  const data = await response.json()
+  const text = data.content?.[0]?.text || ''
+  
+  let jsonStr = text
+  const match = text.match(/\{[\s\S]*\}/)
+  if (match) jsonStr = match[0]
+  
+  const parsed = JSON.parse(jsonStr)
+  const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  console.log(`[Anthropic] Generated ${wordCount} words`)
+
+  return {
+    title: parsed.title || topic,
+    optimizedTitle: parsed.title || topic,
+    optimizedContent: parsed.content || '',
+    content: parsed.content || '',
+    wordCount,
+    qualityScore: Math.min(95, 75 + Math.floor(wordCount / 100)),
+    seoScore: 85,
+    readabilityScore: 80,
+    metaDescription: parsed.metaDescription || '',
+    h1: parsed.h1 || topic,
+    h2s: parsed.h2s || [],
+    sections: [
+      { type: 'tldr', content: parsed.tldrSummary || '' },
+      { type: 'takeaways', data: parsed.keyTakeaways || [] },
+      { type: 'paragraph', content: parsed.content || '' },
+      { type: 'summary', content: parsed.excerpt || '' },
+    ],
+    excerpt: parsed.excerpt || '',
+    author: 'AI Content Expert',
+    publishedAt: new Date().toISOString(),
+  }
+}
+
+// ============================================================================
+// GROQ
+// ============================================================================
+async function generateWithGroq(apiKey: string, model: string, topic: string): Promise<GeneratedContent> {
+  console.log(`[Groq] Generating content for: "${topic}" with model: ${model}`)
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: model || 'llama-3.1-8b-instant',
+      messages: [{ 
+        role: 'user', 
+        content: `Generate a 1500+ word SEO blog post about: "${topic}". Respond with JSON only: {"title":"...", "metaDescription":"...", "h1":"...", "h2s":["..."], "content":"<p>HTML...</p>", "tldrSummary":"...", "keyTakeaways":["..."], "excerpt":"..."}` 
+      }],
+      temperature: 0.7,
+      max_tokens: 4096,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Groq API error: ${response.status}`)
+  }
+
+  const data = await response.json()
+  const text = data.choices?.[0]?.message?.content || ''
+  
+  let jsonStr = text
+  const match = text.match(/\{[\s\S]*\}/)
+  if (match) jsonStr = match[0]
+  
+  const parsed = JSON.parse(jsonStr)
+  const wordCount = (parsed.content || '').replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  console.log(`[Groq] Generated ${wordCount} words`)
+
+  return {
+    title: parsed.title || topic,
+    optimizedTitle: parsed.title || topic,
+    optimizedContent: parsed.content || '',
+    content: parsed.content || '',
+    wordCount,
+    qualityScore: Math.min(95, 75 + Math.floor(wordCount / 100)),
+    seoScore: 85,
+    readabilityScore: 80,
+    metaDescription: parsed.metaDescription || '',
+    h1: parsed.h1 || topic,
+    h2s: parsed.h2s || [],
+    sections: [
+      { type: 'tldr', content: parsed.tldrSummary || '' },
+      { type: 'takeaways', data: parsed.keyTakeaways || [] },
+      { type: 'paragraph', content: parsed.content || '' },
+      { type: 'summary', content: parsed.excerpt || '' },
+    ],
+    excerpt: parsed.excerpt || '',
+    author: 'AI Content Expert',
+    publishedAt: new Date().toISOString(),
+  }
+}
+
+// ============================================================================
+// FALLBACK CONTENT (Only when AI not configured)
+// ============================================================================
+export function generateFallbackContent(topic: string): GeneratedContent {
+  console.warn(`[Fallback] Generating fallback content for: ${topic}`)
+  
+  const cleanTopic = topic.replace(/^(Quick Optimize:|Optimized:)\s*/i, '').trim() || 'Content'
+  
+  const content = `<h1>${cleanTopic}: A Comprehensive Guide</h1>
+
+<p><strong>⚠️ AI Provider Not Configured</strong></p>
+
+<p>This is placeholder content because no AI API key was configured. To get real, AI-generated content optimized for your specific topic, please configure your AI provider.</p>
+
+<h2>How to Enable AI Content Generation</h2>
+
+<ol>
+<li>Go to the <strong>Configuration</strong> tab in the app</li>
+<li>Select an AI Provider (Google Gemini, OpenAI, Anthropic, or Groq)</li>
+<li>Enter your API key</li>
+<li>Select a model</li>
+<li>Click <strong>"Validate API Key"</strong></li>
+</ol>
+
+<h2>Supported AI Providers</h2>
+
 <ul>
-<li><strong>Start with a comprehensive audit</strong> - Understand your current state before making changes</li>
-<li><strong>Identify gaps and opportunities</strong> - Look for areas where you can improve</li>
-<li><strong>Develop a data-driven action plan</strong> - Base your decisions on evidence, not assumptions</li>
-<li><strong>Execute with precision</strong> - Follow through on your plans with attention to detail</li>
-<li><strong>Measure and iterate</strong> - Track your results and continuously improve</li>
+<li><strong>Google Gemini</strong> - Fast and cost-effective (recommended, free tier available)</li>
+<li><strong>OpenAI GPT-4</strong> - High quality output</li>
+<li><strong>Anthropic Claude</strong> - Excellent for long-form content</li>
+<li><strong>Groq</strong> - Ultra-fast inference</li>
 </ul>
 
-<h2>Best Practices and Implementation</h2>
-<p>Focus on quality over quantity. Every action should align with your overall goals and provide genuine value. Consistency and persistence are key factors in achieving long-term success.</p>
-<p>Remember that implementation is just as important as strategy. The best plans fail without proper execution. Create systems and processes that support your goals.</p>
+<h2>What You'll Get with AI</h2>
 
-<h2>Measuring Results</h2>
-<p>Track key performance indicators (KPIs) that align with your objectives. Regular monitoring helps you identify what's working and what needs adjustment.</p>
-<p>Use data to make informed decisions. A/B testing, analytics, and user feedback are invaluable tools for optimization.</p>
+<p>When AI is configured, Page Perfector will generate:</p>
 
-<h2>Conclusion and Next Steps</h2>
-<p>By following the strategies outlined in this guide, you'll be well-positioned to achieve your goals with ${title}. Remember that success comes from consistent execution and continuous improvement.</p>
-<p><strong>Ready to get started?</strong> Begin by implementing the first strategy today and build momentum from there.</p>`
+<ul>
+<li>1500-2500 words of unique, relevant content</li>
+<li>SEO-optimized titles and meta descriptions</li>
+<li>Proper heading structure (H1, H2, H3)</li>
+<li>Key takeaways and TL;DR summaries</li>
+<li>Engaging, reader-friendly formatting</li>
+</ul>
+
+<p><strong>Configure your AI provider now to unlock real content generation!</strong></p>`
+
+  const wordCount = content.replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length
+  
+  return {
+    title: `${cleanTopic}: A Comprehensive Guide`,
+    optimizedTitle: `${cleanTopic}: A Comprehensive Guide`,
+    optimizedContent: content,
+    content: content,
+    wordCount,
+    qualityScore: 50,
+    seoScore: 50,
+    readabilityScore: 70,
+    metaDescription: `Configure your AI provider to generate real content about ${cleanTopic}.`,
+    h1: `${cleanTopic}: A Comprehensive Guide`,
+    h2s: ['How to Enable AI Content Generation', 'Supported AI Providers', 'What You\'ll Get with AI'],
+    sections: [
+      { type: 'tldr', content: 'Configure an AI provider in the Configuration tab to generate real content.' },
+      { type: 'takeaways', data: ['Configure AI in Configuration tab', 'Enter your API key', 'Get real AI-generated content'] },
+      { type: 'paragraph', content: content },
+    ],
+    excerpt: 'Configure your AI provider for real content.',
+    author: 'Page Perfector',
+    publishedAt: new Date().toISOString(),
+  }
+}
+
+// ============================================================================
+// MAIN AI ROUTER
+// ============================================================================
+export async function generateWithAI(aiConfig: AIConfig, topic: string): Promise<GeneratedContent> {
+  console.log('[generateWithAI] ========== AI GENERATION ==========')
+  console.log('[generateWithAI] Provider:', aiConfig.provider)
+  console.log('[generateWithAI] Model:', aiConfig.model)
+  console.log('[generateWithAI] Has API Key:', !!aiConfig.apiKey)
+  console.log('[generateWithAI] Topic:', topic)
+
+  if (!aiConfig.apiKey) {
+    console.warn('[generateWithAI] No API key provided')
+    return generateFallbackContent(topic)
+  }
+
+  const { provider, apiKey, model } = aiConfig
+
+  try {
+    switch (provider.toLowerCase()) {
+      case 'google':
+        return await generateWithGemini(apiKey, model || 'gemini-2.0-flash', topic)
+      
+      case 'openai':
+        return await generateWithOpenAI(apiKey, model || 'gpt-4o-mini', topic)
+      
+      case 'anthropic':
+        return await generateWithAnthropic(apiKey, model || 'claude-3-haiku-20240307', topic)
+      
+      case 'groq':
+        return await generateWithGroq(apiKey, model || 'llama-3.1-8b-instant', topic)
+      
+      case 'openrouter':
+        // OpenRouter uses OpenAI-compatible API
+        return await generateWithOpenAI(apiKey, model || 'openai/gpt-4o-mini', topic)
+      
+      default:
+        console.warn(`[generateWithAI] Unknown provider: ${provider}, trying as Gemini`)
+        return await generateWithGemini(apiKey, model || 'gemini-2.0-flash', topic)
+    }
+  } catch (err) {
+    console.error('[generateWithAI] AI generation failed:', err)
+    console.error('[generateWithAI] Falling back to placeholder content')
+    return generateFallbackContent(topic)
+  }
 }
