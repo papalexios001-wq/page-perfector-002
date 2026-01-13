@@ -1,7 +1,6 @@
 // ============================================================================
-// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v13.0.0
-// FIXED: max_tokens set to 16384 to prevent length cutoff
-// ============================================================================
+// OPTIMIZE-CONTENT EDGE FUNCTION - ENTERPRISE SOTA v14.0.0
+// FIXED: Synchronous processing - await processJob before returning HTTP response// ============================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4'
@@ -915,7 +914,7 @@ serve(async (req: Request): Promise<Response> => {
   }
 
   console.log('[optimize-content] ========== NEW REQUEST ==========')
-  console.log('[optimize-content] Version: v13.0.0 (max_tokens: 16384, timeout: 300s)')
+  console.log('[optimize-content] Version: v14.0.0 (max_tokens: 16384, timeout: 300s)')
 
   try {
     const body = await req.json()
@@ -1009,24 +1008,67 @@ serve(async (req: Request): Promise<Response> => {
       return errorResponse('DATABASE_ERROR', 'Failed to create job.', { error: insertError.message }, 500)
     }
 
-    // Start background processing with content settings
-    processJob(supabase, jobId, topic, aiConfig, contentSettings).catch(err => {
-      console.error('[optimize-content] Background processing error:', err)
-    })
-
-    return jsonResponse({
-      success: true,
-      jobId: jobId,
-      pageId: body.pageId || null,
-      message: `AI optimization started. Target: ${contentSettings.minWordCount}-${contentSettings.maxWordCount} words. Max tokens: ${MAX_OUTPUT_TOKENS}.`,
-      aiProvider: aiConfig.provider,
-      aiModel: aiConfig.model,
-      contentSettings,
-      config: {
-        maxTokens: MAX_OUTPUT_TOKENS,
-        timeoutMs: AI_TIMEOUT_MS,
-      },
-    })
+    // Process job synchronously (CRITICAL: Supabase Edge Functions terminate after HTTP response)
+    // We MUST await the job completion before returning
+    try {
+      console.log(`[optimize-content] Starting synchronous processing for job: ${jobId}`)
+      await processJob(supabase, jobId, topic, aiConfig, contentSettings)
+      
+      // Fetch the completed job from database
+      const { data: completedJob, error: fetchError } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('id', jobId)
+        .single()
+      
+      if (fetchError) {
+        console.error('[optimize-content] Failed to fetch completed job:', fetchError)
+        return errorResponse('DATABASE_ERROR', 'Failed to retrieve job result', { error: fetchError.message }, 500)
+      }
+      
+      console.log(`[optimize-content] Job ${jobId} status: ${completedJob?.status}`)
+      
+      if (completedJob?.status === 'completed' && completedJob?.result) {
+        console.log(`[optimize-content] ✅ Job completed successfully! Words: ${completedJob.result?.wordCount}`)
+        return jsonResponse({
+          success: true,
+          jobId: jobId,
+          pageId: body.pageId || null,
+          status: 'completed',
+          progress: 100,
+          current_step: 'Complete!',
+          result: completedJob.result,
+          message: `Optimization completed! Generated ${completedJob.result?.wordCount || 0} words.`,
+          aiProvider: aiConfig.provider,
+          aiModel: aiConfig.model,
+          contentSettings,
+        })
+      } else {
+        console.error(`[optimize-content] Job failed or incomplete: ${completedJob?.status}`)
+        return jsonResponse({
+          success: false,
+          jobId: jobId,
+          status: completedJob?.status || 'failed',
+          error: completedJob?.error_message || 'Job did not complete successfully',
+          message: completedJob?.error_message || 'Optimization failed',
+        }, 500)
+      }
+    } catch (processError) {
+      console.error('[optimize-content] Processing error:', processError)
+      // Update job status to failed
+      await supabase.from('jobs').update({
+        status: 'failed',
+        error_message: processError instanceof Error ? processError.message : 'Processing failed',
+        updated_at: new Date().toISOString(),
+      }).eq('id', jobId)
+      
+      return errorResponse(
+        'PROCESSING_ERROR',
+        processError instanceof Error ? processError.message : 'Processing failed',
+        {},
+        500
+      )
+    }
 
   } catch (err) {
     console.error('[optimize-content] Request error:', err)
