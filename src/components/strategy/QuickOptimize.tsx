@@ -1,5 +1,6 @@
 // ============================================================================
-// QUICK OPTIMIZE - FIXED VERSION
+// QUICK OPTIMIZE - FIXED VERSION v5.0
+// CRITICAL: Passes AI config AND polls correctly
 // ============================================================================
 
 import { useState, useCallback, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
@@ -10,17 +11,14 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Progress } from '@/components/ui/progress';
+import { Badge } from '@/components/ui/badge';
 import { usePagesStore } from '@/stores/pages-store';
 import { useConfigStore } from '@/stores/config-store';
 import { toast } from 'sonner';
-import { invokeEdgeFunction, isSupabaseConfigured, getSupabaseStatus } from '@/lib/supabase';
 import { supabase } from '@/integrations/supabase/client';
-import { useNavigate } from 'react-router-dom';
-import { BlogPostRenderer } from '../blog/BlogPostComponents';
 
-// ============================================================================
-// ERROR BOUNDARY
-// ============================================================================
+// Error Boundary
 interface ErrorBoundaryProps {
   children: ReactNode;
   onReset?: () => void;
@@ -42,29 +40,24 @@ class RenderErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('[QuickOptimize ErrorBoundary] Caught:', error, errorInfo);
+    console.error('[ErrorBoundary] Caught:', error, errorInfo);
   }
 
   render() {
     if (this.state.hasError) {
       return (
         <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-            <div>
-              <p className="font-medium text-red-900">Failed to render content</p>
-              <p className="text-sm text-red-700 mt-1">{this.state.error?.message}</p>
-              <button
-                onClick={() => {
-                  this.setState({ hasError: false, error: null });
-                  this.props.onReset?.();
-                }}
-                className="mt-2 flex items-center gap-1 text-sm text-red-600 hover:text-red-800"
-              >
-                <RefreshCw className="w-3 h-3" /> Try again
-              </button>
-            </div>
-          </div>
+          <p className="font-medium text-red-900">Rendering Error</p>
+          <p className="text-sm text-red-700">{this.state.error?.message}</p>
+          <button
+            onClick={() => {
+              this.setState({ hasError: false, error: null });
+              this.props.onReset?.();
+            }}
+            className="mt-2 text-sm text-red-600 hover:text-red-800"
+          >
+            <RefreshCw className="w-3 h-3 inline mr-1" /> Try again
+          </button>
         </div>
       );
     }
@@ -72,43 +65,22 @@ class RenderErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 }
 
-// ============================================================================
-// TYPES
-// ============================================================================
+// Types
 interface JobData {
   id: string;
   status: 'pending' | 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
   current_step: string;
-  result?: OptimizationResult;
+  result?: any;
   error_message?: string;
-}
-
-interface OptimizationResult {
-  title: string;
-  optimizedTitle?: string;
-  optimizedContent?: string;
-  content?: string;
-  wordCount?: number;
-  qualityScore?: number;
-  seoScore?: number;
-  readabilityScore?: number;
-  sections?: Array<{ type: string; content?: string; data?: any }>;
-  excerpt?: string;
-  metaDescription?: string;
-  author?: string;
-  publishedAt?: string;
-  h1?: string;
-  h2s?: string[];
 }
 
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 export function QuickOptimize() {
-  const { addPages, updatePage, addActivityLog } = usePagesStore();
+  const { addActivityLog } = usePagesStore();
   const { ai } = useConfigStore();
-  const navigate = useNavigate();
   
   // Form State
   const [pageUrl, setPageUrl] = useState('');
@@ -122,123 +94,117 @@ export function QuickOptimize() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [isComplete, setIsComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [blogPost, setBlogPost] = useState<OptimizationResult | null>(null);
-  const [configError, setConfigError] = useState<string | null>(null);
+  const [blogPost, setBlogPost] = useState<any>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
   
-  // Refs for cleanup
+  // Refs
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollingActiveRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const startTimeRef = useRef(0);
 
   // Check if AI is configured
   const isAiConfigured = Boolean(ai.apiKey && ai.provider && ai.model);
 
-  // Check configuration on mount
+  // Cleanup on unmount
   useEffect(() => {
     mountedRef.current = true;
-    
-    if (!isSupabaseConfigured()) {
-      const status = getSupabaseStatus();
-      console.error('[QuickOptimize] Supabase not configured:', status);
-      setConfigError('Backend not configured. Please set up Supabase environment variables.');
-    }
-    
     return () => {
       mountedRef.current = false;
-      pollingActiveRef.current = false;
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
+      if (pollingRef.current) clearInterval(pollingRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
   // Poll job status
   const pollJobStatus = useCallback(async (currentJobId: string) => {
-    if (!pollingActiveRef.current || !mountedRef.current) {
-      return;
-    }
+    if (!mountedRef.current) return;
 
     try {
+      console.log(`[Poll] Checking job: ${currentJobId}`);
+      
       const { data: jobData, error: queryError } = await supabase
         .from('jobs')
         .select('*')
         .eq('id', currentJobId)
         .single();
 
-      if (queryError || !jobData) {
+      if (!mountedRef.current) return;
+
+      if (queryError) {
+        console.error('[Poll] Query error:', queryError);
+        return;
+      }
+
+      if (!jobData) {
+        console.warn('[Poll] Job not found');
         return;
       }
 
       const job = jobData as JobData;
+      console.log(`[Poll] Status: ${job.status}, Progress: ${job.progress}%`);
       
       if (mountedRef.current) {
         setProgress(job.progress || 0);
         setStatusMessage(job.current_step || 'Processing...');
       }
 
-      if (job.status === 'completed') {
-        pollingActiveRef.current = false;
+      // Handle completion
+      if (job.status === 'completed' && job.result) {
+        console.log('[Poll] Job completed!');
+        
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
           pollingRef.current = null;
         }
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
 
-        if (mountedRef.current && job.result) {
+        if (mountedRef.current) {
           setBlogPost(job.result);
-          
-          addActivityLog({
-            type: 'success',
-            pageUrl,
-            message: 'Optimization completed successfully',
-            details: { 
-              keyword: targetKeyword || 'auto-detected', 
-              outputMode,
-              qualityScore: job.result.qualityScore,
-              wordCount: job.result.wordCount,
-            },
-          });
-
-          toast.success('Optimization Complete!', {
-            description: `Quality Score: ${job.result.qualityScore || 'N/A'}/100 • Words: ${job.result.wordCount || 'N/A'}`,
-          });
-
           setIsComplete(true);
           setIsOptimizing(false);
+          
+          toast.success('Optimization Complete!', {
+            description: `Quality: ${job.result.qualityScore || 'N/A'}/100 • Words: ${job.result.wordCount || 'N/A'}`,
+          });
         }
       }
 
+      // Handle failure
       if (job.status === 'failed') {
-        pollingActiveRef.current = false;
+        console.error('[Poll] Job failed:', job.error_message);
+        
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
           pollingRef.current = null;
+        }
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
         }
 
         if (mountedRef.current) {
           setError(job.error_message || 'Optimization failed');
           setIsOptimizing(false);
           setIsComplete(true);
-
+          
           toast.error('Optimization Failed', {
-            description: job.error_message || 'Check console for details',
+            description: job.error_message || 'Unknown error',
           });
         }
       }
     } catch (err) {
-      console.error('[QuickOptimize Poll] Exception:', err);
+      console.error('[Poll] Exception:', err);
     }
-  }, [pageUrl, targetKeyword, outputMode, addActivityLog]);
+  }, []);
 
   // Handle optimize
   const handleOptimize = async () => {
     if (!pageUrl.trim()) {
       toast.error('Please enter a page URL or topic');
-      return;
-    }
-
-    if (!isSupabaseConfigured()) {
-      toast.error('Backend not configured');
       return;
     }
 
@@ -257,39 +223,42 @@ export function QuickOptimize() {
     setIsComplete(false);
     setBlogPost(null);
     setJobId(null);
+    setElapsedTime(0);
+    startTimeRef.current = Date.now();
+
+    // Start timer
+    timerRef.current = setInterval(() => {
+      if (mountedRef.current) {
+        setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }
+    }, 1000);
 
     try {
-      setStatusMessage('Calling optimization service...');
-      setProgress(5);
-
-      // Build AI config payload - ONLY DECLARATION IN THIS FILE
-      const aiConfigPayload = isAiConfigured ? {
-        provider: ai.provider,
-        apiKey: ai.apiKey,
-        model: ai.model,
-      } : undefined;
-
-      console.log('[QuickOptimize] Starting optimization with AI config:', {
+      console.log('[QuickOptimize] Starting optimization...');
+      console.log('[QuickOptimize] AI Config:', {
         provider: ai.provider,
         hasApiKey: !!ai.apiKey,
         model: ai.model,
         isConfigured: isAiConfigured,
       });
 
+      // Build AI config payload
+      const aiConfigPayload = isAiConfigured ? {
+        provider: ai.provider,
+        apiKey: ai.apiKey,
+        model: ai.model,
+      } : undefined;
+
       // Call edge function WITH AI CONFIG
-      const { data, error: invokeError } = await invokeEdgeFunction<{
-        success: boolean;
-        jobId?: string;
-        message?: string;
-        error?: string;
-      }>('optimize-content', {
-        url: pageUrl,
-        siteUrl: pageUrl,
-        mode: 'optimize',
-        postTitle: targetKeyword || pageUrl,
-        keyword: targetKeyword || undefined,
-        outputMode: outputMode,
-        aiConfig: aiConfigPayload,
+      const { data, error: invokeError } = await supabase.functions.invoke('optimize-content', {
+        body: {
+          url: pageUrl,
+          siteUrl: pageUrl,
+          postTitle: targetKeyword || pageUrl,
+          keyword: targetKeyword || undefined,
+          outputMode: outputMode,
+          aiConfig: aiConfigPayload, // CRITICAL: Pass AI config!
+        }
       });
 
       console.log('[QuickOptimize] Edge function response:', data, invokeError);
@@ -299,37 +268,28 @@ export function QuickOptimize() {
       }
 
       if (!data?.success) {
-        throw new Error(data?.error || data?.message || 'Optimization service returned an error');
+        throw new Error(data?.error || 'Optimization service returned an error');
       }
 
       if (!data?.jobId) {
-        throw new Error('No job ID returned from optimization service');
+        throw new Error('No job ID returned');
       }
 
       const newJobId = data.jobId;
       console.log('[QuickOptimize] Job created:', newJobId);
       setJobId(newJobId);
-      setStatusMessage('Optimization in progress...');
-      setProgress(10);
-
-      addActivityLog({
-        type: 'info',
-        pageUrl,
-        message: `Quick optimization started with ${isAiConfigured ? ai.provider : 'fallback'} AI`,
-        details: { keyword: targetKeyword || 'auto-detect', outputMode, jobId: newJobId },
-      });
+      setStatusMessage('Job started, waiting for updates...');
+      setProgress(5);
 
       // Start polling
-      pollingActiveRef.current = true;
-      
       setTimeout(() => {
-        if (pollingActiveRef.current && mountedRef.current) {
+        if (mountedRef.current) {
           pollJobStatus(newJobId);
         }
       }, 500);
       
       pollingRef.current = setInterval(() => {
-        if (pollingActiveRef.current && mountedRef.current) {
+        if (mountedRef.current) {
           pollJobStatus(newJobId);
         }
       }, 1000);
@@ -337,12 +297,17 @@ export function QuickOptimize() {
     } catch (err: any) {
       console.error('[QuickOptimize] Error:', err);
       
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      
       if (mountedRef.current) {
         setStatusMessage('Optimization failed');
         setError(err.message || 'An unexpected error occurred');
         setIsOptimizing(false);
         setIsComplete(true);
-
+        
         toast.error('Optimization Failed', {
           description: err.message,
         });
@@ -361,26 +326,22 @@ export function QuickOptimize() {
     setIsComplete(false);
     setError(null);
     setBlogPost(null);
-    pollingActiveRef.current = false;
+    setElapsedTime(0);
+    
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
   };
 
-  // Normalize blog post for rendering
-  const getNormalizedPost = () => {
-    if (!blogPost) return null;
-    
-    return {
-      title: blogPost.title || blogPost.optimizedTitle || 'Optimized Post',
-      author: blogPost.author || 'AI Content Expert',
-      publishedAt: blogPost.publishedAt || new Date().toISOString(),
-      excerpt: blogPost.excerpt || blogPost.metaDescription || '',
-      sections: Array.isArray(blogPost.sections) ? blogPost.sections : [
-        { type: 'paragraph' as const, content: blogPost.content || blogPost.optimizedContent || 'Content generated.' }
-      ],
-    };
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   };
 
   // ========================================================================
@@ -395,41 +356,26 @@ export function QuickOptimize() {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Configuration Error Banner */}
-        {configError && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-medium text-amber-900">Configuration Required</p>
-                <p className="text-xs text-amber-700 mt-1">{configError}</p>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* AI Configuration Status */}
-        {!configError && (
-          <div className={`p-2 rounded-lg border ${isAiConfigured ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
-            <div className="flex items-center gap-2">
-              {isAiConfigured ? (
-                <>
-                  <CheckCircle2 className="w-4 h-4 text-green-600" />
-                  <p className="text-xs text-green-800">
-                    <strong>{ai.provider}</strong> configured • Model: <strong>{ai.model}</strong>
-                  </p>
-                </>
-              ) : (
-                <>
-                  <Settings className="w-4 h-4 text-blue-600" />
-                  <p className="text-xs text-blue-800">
-                    AI not configured. <strong>Go to Configuration tab</strong> to enable real AI content.
-                  </p>
-                </>
-              )}
-            </div>
+        <div className={`p-2 rounded-lg border ${isAiConfigured ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+          <div className="flex items-center gap-2">
+            {isAiConfigured ? (
+              <>
+                <CheckCircle2 className="w-4 h-4 text-green-600" />
+                <p className="text-xs text-green-800">
+                  <strong>{ai.provider}</strong> • {ai.model}
+                </p>
+              </>
+            ) : (
+              <>
+                <Settings className="w-4 h-4 text-amber-600" />
+                <p className="text-xs text-amber-800">
+                  AI not configured. <strong>Go to Configuration tab</strong>.
+                </p>
+              </>
+            )}
           </div>
-        )}
+        </div>
 
         {/* Input Form */}
         {!isComplete && (
@@ -437,7 +383,7 @@ export function QuickOptimize() {
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Page URL / Topic *</Label>
               <Input
-                placeholder="Enter a URL or topic like 'best running shoes 2025'"
+                placeholder="Enter URL or topic like 'best running shoes 2025'"
                 value={pageUrl}
                 onChange={(e) => setPageUrl(e.target.value)}
                 className="bg-muted/50"
@@ -450,7 +396,7 @@ export function QuickOptimize() {
               <div className="relative">
                 <Target className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
-                  placeholder="(auto-detect from URL/topic)"
+                  placeholder="(auto-detect)"
                   value={targetKeyword}
                   onChange={(e) => setTargetKeyword(e.target.value)}
                   className="bg-muted/50 pl-10"
@@ -497,25 +443,26 @@ export function QuickOptimize() {
           <motion.div 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="space-y-2"
+            className="space-y-3 p-4 bg-blue-50 rounded-lg border border-blue-200"
           >
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-2">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                {statusMessage || 'Optimizing...'}
-              </span>
-              <span className="font-mono">{progress}%</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                <span className="text-sm font-medium text-blue-900">Optimizing...</span>
+              </div>
+              <span className="text-xs text-blue-600">{formatTime(elapsedTime)}</span>
             </div>
-            <div className="h-2 bg-muted rounded-full overflow-hidden">
-              <motion.div
-                className="h-full bg-gradient-to-r from-primary to-primary/80"
-                initial={{ width: 0 }}
-                animate={{ width: `${progress}%` }}
-                transition={{ duration: 0.3, ease: 'easeOut' }}
-              />
+            
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs">
+                <span className="text-blue-700">{statusMessage}</span>
+                <span className="font-mono text-blue-900">{progress}%</span>
+              </div>
+              <Progress value={progress} className="h-2" />
             </div>
+            
             {jobId && (
-              <p className="text-xs text-muted-foreground/50 font-mono">Job: {jobId.slice(0, 8)}...</p>
+              <p className="text-xs text-blue-500 font-mono">Job: {jobId.slice(0, 8)}...</p>
             )}
           </motion.div>
         )}
@@ -528,10 +475,10 @@ export function QuickOptimize() {
             className="p-3 bg-red-50 border border-red-200 rounded-lg"
           >
             <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+              <AlertCircle className="w-4 h-4 text-red-600 mt-0.5" />
               <div>
                 <p className="text-sm font-medium text-red-900">Optimization Failed</p>
-                <p className="text-xs text-red-700 mt-1">{error}</p>
+                <p className="text-xs text-red-700">{error}</p>
               </div>
             </div>
           </motion.div>
@@ -545,14 +492,34 @@ export function QuickOptimize() {
             className="p-3 bg-green-50 border border-green-200 rounded-lg"
           >
             <div className="flex items-start gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />
+              <CheckCircle2 className="w-4 h-4 text-green-600 mt-0.5" />
               <div className="flex-1">
                 <p className="text-sm font-medium text-green-900">Optimization Complete!</p>
-                <p className="text-xs text-green-700 mt-1">
+                <p className="text-xs text-green-700">
                   Quality: {blogPost.qualityScore || 'N/A'}/100 • 
-                  Words: {blogPost.wordCount || 'N/A'} •
-                  SEO: {blogPost.seoScore || 'N/A'}/100
+                  Words: {blogPost.wordCount || 'N/A'}
                 </p>
+              </div>
+            </div>
+            
+            {/* Results Preview */}
+            <div className="mt-3 p-3 bg-white rounded-lg border border-green-100">
+              <h4 className="font-medium text-gray-900 text-sm mb-1">
+                {blogPost.title || blogPost.optimizedTitle || 'Optimized Content'}
+              </h4>
+              {blogPost.metaDescription && (
+                <p className="text-xs text-gray-600 line-clamp-2">{blogPost.metaDescription}</p>
+              )}
+              <div className="flex flex-wrap gap-1 mt-2">
+                {blogPost.qualityScore && (
+                  <Badge variant="secondary" className="text-xs">Quality: {blogPost.qualityScore}</Badge>
+                )}
+                {blogPost.seoScore && (
+                  <Badge variant="secondary" className="text-xs">SEO: {blogPost.seoScore}</Badge>
+                )}
+                {blogPost.wordCount && (
+                  <Badge variant="secondary" className="text-xs">Words: {blogPost.wordCount}</Badge>
+                )}
               </div>
             </div>
           </motion.div>
@@ -562,7 +529,7 @@ export function QuickOptimize() {
         {!isComplete ? (
           <Button
             onClick={handleOptimize}
-            disabled={isOptimizing || !pageUrl.trim() || !!configError}
+            disabled={isOptimizing || !pageUrl.trim()}
             className="w-full gap-2"
             variant="default"
           >
@@ -582,30 +549,6 @@ export function QuickOptimize() {
             <RefreshCw className="w-4 h-4" />
             Optimize Another
           </Button>
-        )}
-
-        {/* Blog Post Preview */}
-        {isComplete && blogPost && !error && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mt-4 pt-4 border-t border-border/50"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs text-muted-foreground">Preview:</p>
-              <Button variant="ghost" size="sm" className="h-6 text-xs gap-1">
-                <ExternalLink className="w-3 h-3" />
-                Full View
-              </Button>
-            </div>
-            <div className="max-h-[400px] overflow-y-auto rounded-lg border border-border/30 bg-white">
-              <RenderErrorBoundary onReset={handleReset}>
-                <div className="p-4">
-                  <BlogPostRenderer post={getNormalizedPost()!} />
-                </div>
-              </RenderErrorBoundary>
-            </div>
-          </motion.div>
         )}
       </CardContent>
     </Card>
